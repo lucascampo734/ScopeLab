@@ -10,8 +10,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            name: ScopeLab-Windows
           # Compila en una Mac Intel de GitHub (las de chip Apple suelen no estar
           # disponibles). El resultado es universal: Apple Silicon + Intel.
           - os: macos-15-intel

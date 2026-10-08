@@ -1504,7 +1504,7 @@ void ScopeLabAudioProcessorEditor::updatePhase (std::vector<Track*>& tracks, Tra
     }
 
     // Alineación: ~340 ms de graves, decimados x8, buscando hasta ±20 ms (10 veces por segundo)
-    constexpr int alignLen = 16384, decim = 8;
+    static constexpr int alignLen = 16384, decim = 8;   // static: Visual Studio no captura constexpr locales en lambdas
     const bool doAlign = aligned && (++frameCounter % 6 == 0);
     auto decimatedLows = [this] (Track& t, std::vector<float>& out)
     {

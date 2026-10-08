@@ -87,6 +87,9 @@ namespace
         return (db > 0.0f ? "+" : "") + (whole ? String (roundToInt (db)) : String (db, 1));
     }
 
+    constexpr float specMinF = 20.0f, specMaxF = 20000.0f, specTopDb = 6.0f, specBottomDb = -90.0f;
+    float specTilt (float f) { return 4.5f * std::log2 (f / 1000.0f); }
+
     // Filtro pasa-bajos de 2 polos (aprox. 150 Hz) para medir la fase en graves
     void lowpass (const std::vector<float>& in, std::vector<float>& out, double sr, float cutoff)
     {
@@ -512,7 +515,7 @@ void PhaseView::paint (Graphics& g)
     auto footer = area.removeFromBottom (30.0f);
     g.setFont (uiFont (10.0f));
     g.setColour (ScopeColours::text);
-    g.drawFittedText (u8 ("+1 = suman · 0 = no se relacionan\nnegativo = se cancelan al sumarse"), footer.toNearestInt(),
+    g.drawFittedText (u8 ("+1 = suman · negativo = se cancelan\nTrack Delay: botón D del mezclador de Ableton"), footer.toNearestInt(),
                       Justification::bottomLeft, 2);
 
     area.removeFromTop (4.0f);
@@ -527,7 +530,7 @@ void PhaseView::paint (Graphics& g)
         area.removeFromTop (40.0f);
     }
 
-    const float rowH = jmin (52.0f, area.getHeight() / (float) rows.size());
+    const float rowH = jmin (84.0f, area.getHeight() / (float) rows.size());
     for (auto& row : rows)
     {
         auto r = area.removeFromTop (rowH);
@@ -562,7 +565,39 @@ void PhaseView::paint (Graphics& g)
 
         g.setColour (ScopeColours::text);
         g.setFont (uiFont (10.0f));
-        g.drawText ("todo el rango " + signedValue (row.fullCorr), r.removeFromTop (14.0f), Justification::centredRight);
+        g.drawText ("todo el rango " + signedValue (row.fullCorr), r.removeFromTop (13.0f), Justification::centredRight);
+
+        // Alineación sugerida
+        String text;
+        Colour colour = ScopeColours::text;
+        if (! row.alignValid)
+        {
+            text = u8 ("alineación: sin relación clara en graves");
+        }
+        else
+        {
+            const float ms = std::abs (row.lagMs);
+            const String msText = String (ms, ms < 10.0f ? 1 : 0) + " ms";
+            if (ms < 0.25f)
+            {
+                text = u8 ("alineadas en el tiempo ✓");
+                colour = ScopeColours::mid;
+            }
+            else
+            {
+                text = (row.lagMs > 0.0f ? "llega " + msText + " tarde  " : "llega " + msText + " antes  ")
+                     + u8 ("→  Track Delay ") + (row.lagMs > 0.0f ? "-" : "+") + msText;
+                colour = ScopeColours::caution;
+            }
+            if (row.alignCorr < 0.0f)
+            {
+                text << "\n" << u8 ("y está con la fase invertida: probá Utility → Ø");
+                colour = ScopeColours::warn;
+            }
+        }
+        g.setColour (colour);
+        g.setFont (uiFont (11.0f, true));
+        g.drawFittedText (text, r.withTrimmedTop (2.0f).toNearestInt(), Justification::topLeft, 2, 0.9f);
     }
 }
 
@@ -629,26 +664,51 @@ SpectrumView::SpectrumView()
     float sum = 0.0f;
     for (auto v : ones) sum += v;
     windowGain = 2.0f / sum;   // un seno a 0 dBFS marca ~0 dB
+
+    // Paleta de la cascada: oscuro -> azul -> cian -> verde -> amarillo -> rojo
+    const std::pair<float, Colour> stops[] = { { 0.0f, ScopeColours::bg }, { 0.3f, Colour (0xff1c2a72) },
+                                               { 0.55f, Colour (0xff1fa7d6) }, { 0.75f, Colour (0xffb6ff5c) },
+                                               { 0.9f, Colour (0xffffc84a) }, { 1.0f, Colour (0xffff4f6a) } };
+    for (int i = 0; i < 256; ++i)
+    {
+        const float t = (float) i / 255.0f;
+        int k = 0;
+        while (k < 4 && t > stops[k + 1].first) ++k;
+        const float u = (t - stops[k].first) / (stops[k + 1].first - stops[k].first);
+        lut[(size_t) i] = stops[k].second.interpolatedWith (stops[k + 1].second, jlimit (0.0f, 1.0f, u));
+    }
 }
 
-void SpectrumView::beginFrame (double sr)
+void SpectrumView::setOptions (bool msAvail, bool msEnabled, bool spectrogramEnabled)
+{
+    msAvailable = msAvail;
+    msOn = msEnabled;
+    if (spectroOn != spectrogramEnabled)
+        spectroImage = {};   // empezar la cascada limpia
+    spectroOn = spectrogramEnabled;
+}
+
+void SpectrumView::beginFrame (double sr, bool showCollisions)
 {
     sampleRate = sr;
+    collisions = showCollisions;
     order.clear();
     for (auto& [key, c] : curves)
         c.touched = false;
 }
 
-void SpectrumView::pushTrack (int key, const float* mono, Colour colour, const String& name)
+void SpectrumView::pushTrack (int key, const float* mono, Colour colour, const String& name, bool isSum)
 {
     auto& curve = curves[key];
     if (curve.smoothed.empty())
     {
         curve.smoothed.assign ((size_t) fftSize / 2 + 1, -120.0f);
         curve.peaks.assign ((size_t) fftSize / 2 + 1, -120.0f);
+        curve.average.assign ((size_t) fftSize / 2 + 1, -120.0f);
     }
     curve.colour = colour;
     curve.name = name;
+    curve.isSum = isSum;
     curve.touched = true;
     order.push_back (key);
 
@@ -663,14 +723,57 @@ void SpectrumView::pushTrack (int key, const float* mono, Colour colour, const S
         auto& s = curve.smoothed[i];
         s += (db - s) * (db > s ? 0.6f : 0.12f);
         curve.peaks[i] = jmax (db, curve.peaks[i] - 0.35f);
+        curve.average[i] += (db - curve.average[i]) * 0.02f;   // promedio largo (~1 s) para la referencia
     }
+}
+
+int SpectrumView::mainCurveKey() const
+{
+    // La suma si existe; si no, la primera curva (esta pista, o Mid en modo M/S)
+    if (order.empty()) return 0;
+    for (auto k : order)
+        if (curves.at (k).isSum) return k;
+    return order.front();
 }
 
 void SpectrumView::endFrame()
 {
     for (auto it = curves.begin(); it != curves.end();)
         it = it->second.touched ? std::next (it) : curves.erase (it);
+    if (spectroOn)
+        pushSpectrogramColumn();
     repaint();
+}
+
+void SpectrumView::pushSpectrogramColumn()
+{
+    if (order.empty() || lastPlot.isEmpty())
+        return;
+    const int w = (int) lastPlot.getWidth(), h = (int) lastPlot.getHeight();
+    if (w < 4 || h < 4)
+        return;
+
+    if (! spectroImage.isValid() || spectroImage.getWidth() != w || spectroImage.getHeight() != h)
+    {
+        spectroImage = Image (Image::RGB, w, h, true);
+        Graphics ig (spectroImage);
+        ig.fillAll (ScopeColours::bg);
+    }
+
+    spectroKey = mainCurveKey();
+    const auto& bins = curves.at (spectroKey).smoothed;
+
+    spectroImage.moveImageSection (0, 0, 1, 0, w - 1, h);
+    Image::BitmapData bd (spectroImage, w - 1, 0, 1, h, Image::BitmapData::writeOnly);
+    constexpr float floorDb = -84.0f, topDb = 0.0f;
+    for (int y = 0; y < h; ++y)
+    {
+        const float t0 = 1.0f - (float) (y + 1) / (float) h, t1 = 1.0f - (float) y / (float) h;   // arriba = agudos
+        const float f0 = specMinF * std::pow (specMaxF / specMinF, t0), f1 = specMinF * std::pow (specMaxF / specMinF, t1);
+        const float db = valueAt (bins, f0, f1) + specTilt (std::sqrt (f0 * f1));
+        const int idx = jlimit (0, 255, roundToInt ((db - floorDb) / (topDb - floorDb) * 255.0f));
+        bd.setPixelColour (0, y, lut[(size_t) idx]);
+    }
 }
 
 float SpectrumView::valueAt (const std::vector<float>& bins, float f0, float f1) const
@@ -693,16 +796,90 @@ float SpectrumView::valueAt (const std::vector<float>& bins, float f0, float f1)
     return mx;
 }
 
+void SpectrumView::toggleReference()
+{
+    if (reference == nullptr)
+        return;
+    if (! reference->empty())
+    {
+        reference->clear();
+        if (referenceName != nullptr) referenceName->clear();
+    }
+    else if (! order.empty())
+    {
+        const auto& c = curves.at (mainCurveKey());
+        *reference = c.average;
+        if (referenceName != nullptr) *referenceName = c.name;
+    }
+    repaint();
+}
+
+bool SpectrumView::hitsHeaderControl (Point<float> p) const
+{
+    return expandIcon.expanded (4.0f).contains (p) || msChip.contains (p) || refChip.contains (p) || spectroChip.contains (p);
+}
+
 void SpectrumView::mouseDown (const MouseEvent& e)
 {
-    if (expandIcon.expanded (4.0f).contains (e.position) && onExpandToggle)
-        onExpandToggle();
+    const auto p = e.position;
+    if (expandIcon.expanded (4.0f).contains (p)) { if (onExpandToggle) onExpandToggle(); return; }
+    if (msChip.contains (p))                     { if (onToggleMs) onToggleMs(); return; }
+    if (spectroChip.contains (p))                { if (onToggleSpectrogram) onToggleSpectrogram(); return; }
+    if (refChip.contains (p))                    { toggleReference(); return; }
 }
 
 void SpectrumView::mouseDoubleClick (const MouseEvent& e)
 {
-    if (! expandIcon.expanded (4.0f).contains (e.position) && onExpandToggle)
+    if (! hitsHeaderControl (e.position) && onExpandToggle)
         onExpandToggle();
+}
+
+void SpectrumView::paintSpectrogram (Graphics& g, Rectangle<float> area, Rectangle<float> leftLabels, Rectangle<float> bottomLabels)
+{
+    if (spectroImage.isValid())
+        g.drawImage (spectroImage, area, RectanglePlacement::stretchToFit);
+    else
+    {
+        g.setColour (ScopeColours::bg);
+        g.fillRect (area);
+    }
+
+    auto yOfF = [&] (float f) { return area.getBottom() - area.getHeight() * std::log (f / specMinF) / std::log (specMaxF / specMinF); };
+    g.setFont (uiFont (10.0f));
+    for (float f : { 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f })
+    {
+        const float y = yOfF (f);
+        g.setColour (Colours::white.withAlpha (0.07f));
+        g.drawHorizontalLine (roundToInt (y), area.getX(), area.getRight());
+        g.setColour (ScopeColours::text);
+        const String label = f >= 1000.0f ? String (f / 1000.0f, 0) + "k" : String ((int) f);
+        g.drawText (label, Rectangle<float> (leftLabels.getX(), y - 6.0f, leftLabels.getWidth() - 4.0f, 12.0f), Justification::centredRight);
+    }
+    g.setColour (ScopeColours::text);
+    g.drawText (u8 ("← pasado"), bottomLabels, Justification::centredLeft);
+    g.drawText (u8 ("ahora"), bottomLabels, Justification::centredRight);
+
+    if (hoverPos.has_value() && area.contains (*hoverPos))
+    {
+        const float f = specMinF * std::pow (specMaxF / specMinF, (area.getBottom() - hoverPos->y) / area.getHeight());
+        g.setColour (ScopeColours::textBright.withAlpha (0.5f));
+        g.drawHorizontalLine (roundToInt (hoverPos->y), area.getX(), area.getRight());
+
+        auto box = Rectangle<float> (hoverPos->x + 12.0f, hoverPos->y - 20.0f, 140.0f, 40.0f);
+        if (box.getRight() > area.getRight()) box.setX (hoverPos->x - 152.0f);
+        box.setY (jlimit (area.getY(), area.getBottom() - box.getHeight(), box.getY()));
+        g.setColour (ScopeColours::bg.withAlpha (0.92f));
+        g.fillRoundedRectangle (box, 5.0f);
+        g.setColour (ScopeColours::gridStrong);
+        g.drawRoundedRectangle (box, 5.0f, 1.0f);
+        auto inner = box.reduced (9.0f, 5.0f);
+        g.setFont (uiFont (13.0f, true));
+        g.setColour (ScopeColours::textBright);
+        g.drawText (formatHz (f), inner.removeFromTop (15.0f), Justification::centredLeft);
+        g.setFont (uiFont (11.0f));
+        g.setColour (ScopeColours::text);
+        g.drawText (u8 ("nota ") + noteName (f), inner, Justification::centredLeft);
+    }
 }
 
 void SpectrumView::paint (Graphics& g)
@@ -712,32 +889,63 @@ void SpectrumView::paint (Graphics& g)
 
     auto area = b.reduced (10.0f, 8.0f);
     auto header = area.removeFromTop (16.0f);
-    auto freqLabels = area.removeFromBottom (14.0f);
-    auto dbLabels = area.removeFromLeft (30.0f);
-    freqLabels.removeFromLeft (30.0f);
+    area.removeFromTop (4.0f);
+    auto bottomLabels = area.removeFromBottom (14.0f);
+    auto leftLabels = area.removeFromLeft (30.0f);
+    bottomLabels.removeFromLeft (30.0f);
+    lastPlot = area;
 
     expandIcon = header.removeFromRight (16.0f).translated (-2.0f, 0.0f);
     drawExpandIcon (g, expandIcon, expanded);
     header.removeFromRight (10.0f);
 
-    const bool multi = order.size() > 1;
-
     g.setFont (uiFont (12.0f, true));
     g.setColour (ScopeColours::textBright);
-    g.drawText ("ESPECTRO", header, Justification::centredLeft);
-    g.setFont (uiFont (11.0f));
-    g.setColour (ScopeColours::text);
-    g.drawText (u8 ("FFT 4096  ·  pendiente 4.5 dB/oct"), header, Justification::centredRight);
-    if (multi)
+    g.drawText (spectroOn ? "CASCADA" : "ESPECTRO", header.removeFromLeft (78.0f), Justification::centredLeft);
+
+    // Botones del encabezado
+    auto chip = [&] (Rectangle<float>& r, const String& text, bool on)
     {
-        g.setColour (ScopeColours::warn);
-        g.drawText (u8 ("rojo = las pistas se pisan en esa frecuencia"), header.withTrimmedLeft (90.0f), Justification::centredLeft);
+        g.setFont (uiFont (10.0f, true));
+        const float w = GlyphArrangement::getStringWidth (g.getCurrentFont(), text) + 16.0f;
+        r = header.removeFromLeft (w).reduced (0.0f, 0.5f);
+        header.removeFromLeft (6.0f);
+        g.setColour (on ? ScopeColours::left.withAlpha (0.22f) : ScopeColours::panel);
+        g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (on ? ScopeColours::left : ScopeColours::gridStrong);
+        g.drawRoundedRectangle (r, 3.0f, 1.0f);
+        g.setColour (on ? ScopeColours::textBright : ScopeColours::text);
+        g.drawText (text, r, Justification::centred);
+    };
+    const bool hasRef = reference != nullptr && ! reference->empty();
+    if (msAvailable) chip (msChip, "MID/SIDE", msOn);
+    else             msChip = {};
+    if (! spectroOn) chip (refChip, hasRef ? "BORRAR REF" : "GUARDAR REF", hasRef);
+    else             refChip = {};
+    chip (spectroChip, "CASCADA", spectroOn);
+    header.removeFromLeft (6.0f);
+
+    g.setFont (uiFont (11.0f));
+    if (spectroOn)
+    {
+        auto it = curves.find (spectroKey);
+        g.setColour (ScopeColours::text);
+        if (it != curves.end())
+            g.drawText ("muestra: " + it->second.name, header, Justification::centredRight);
+        paintSpectrogram (g, area, leftLabels, bottomLabels);
+        return;
     }
 
-    constexpr float minF = 20.0f, maxF = 20000.0f, topDb = 6.0f, bottomDb = -90.0f;
-    auto xOf = [&] (float f) { return area.getX() + area.getWidth() * std::log (f / minF) / std::log (maxF / minF); };
-    auto yOf = [&] (float db) { return jmap (jlimit (bottomDb, topDb, db), topDb, bottomDb, area.getY(), area.getBottom()); };
-    auto tilt = [] (float f) { return 4.5f * std::log2 (f / 1000.0f); };
+    g.setColour (ScopeColours::text);
+    g.drawText (u8 ("pendiente 4.5 dB/oct"), header, Justification::centredRight);
+    if (collisions)
+    {
+        g.setColour (ScopeColours::warn);
+        g.drawText ("rojo = se pisan", header, Justification::centredLeft);
+    }
+
+    auto xOf = [&] (float f) { return area.getX() + area.getWidth() * std::log (f / specMinF) / std::log (specMaxF / specMinF); };
+    auto yOf = [&] (float db) { return jmap (jlimit (specBottomDb, specTopDb, db), specTopDb, specBottomDb, area.getY(), area.getBottom()); };
 
     // Grilla
     g.setFont (uiFont (10.0f));
@@ -754,63 +962,69 @@ void SpectrumView::paint (Graphics& g)
         g.setColour (ScopeColours::text);
         const String label = f >= 1000.0f ? String (f / 1000.0f, 0) + "k" : String ((int) f);
         auto just = f <= 20.0f ? Justification::centredLeft : (f >= 20000.0f ? Justification::centredRight : Justification::centred);
-        auto lr = Rectangle<float> (36.0f, freqLabels.getHeight()).withCentre ({ x, freqLabels.getCentreY() });
+        auto lr = Rectangle<float> (36.0f, bottomLabels.getHeight()).withCentre ({ x, bottomLabels.getCentreY() });
         if (f <= 20.0f) lr.setX (x);
         if (f >= 20000.0f) lr.setRight (x);
         g.drawText (label, lr, just);
     }
     const float dbStep = area.getHeight() > 360.0f ? 6.0f : 12.0f;
-    for (float db = 0.0f; db >= bottomDb + 1.0f; db -= dbStep)
+    for (float db = 0.0f; db >= specBottomDb + 1.0f; db -= dbStep)
     {
         const float y = yOf (db);
         g.setColour (std::abs (db) < 0.5f ? ScopeColours::gridStrong : ScopeColours::grid);
         g.drawHorizontalLine (roundToInt (y), area.getX(), area.getRight());
         g.setColour (ScopeColours::text);
-        g.drawText (String ((int) db), Rectangle<float> (dbLabels.getX(), y - 6.0f, dbLabels.getWidth() - 4.0f, 12.0f), Justification::centredRight);
+        g.drawText (String ((int) db), Rectangle<float> (leftLabels.getX(), y - 6.0f, leftLabels.getWidth() - 4.0f, 12.0f), Justification::centredRight);
     }
 
     if (order.empty())
         return;
 
-    // Valores por columna de píxel, para cada pista
+    // Valores por columna de píxel
     const int cols = jmax (2, (int) area.getWidth());
     std::vector<std::vector<float>> levels (order.size(), std::vector<float> ((size_t) cols));
     std::vector<std::vector<float>> peakLevels (order.size(), std::vector<float> ((size_t) cols));
+    std::vector<float> refLevels (hasRef ? (size_t) cols : 0);
     for (int c = 0; c < cols; ++c)
     {
         const float t0 = (float) c / (float) cols, t1 = (float) (c + 1) / (float) cols;
-        const float f0 = minF * std::pow (maxF / minF, t0), f1 = minF * std::pow (maxF / minF, t1);
-        const float tl = tilt (std::sqrt (f0 * f1));
+        const float f0 = specMinF * std::pow (specMaxF / specMinF, t0), f1 = specMinF * std::pow (specMaxF / specMinF, t1);
+        const float tl = specTilt (std::sqrt (f0 * f1));
         for (size_t k = 0; k < order.size(); ++k)
         {
             const auto& curve = curves.at (order[k]);
             levels[k][(size_t) c] = valueAt (curve.smoothed, f0, f1) + tl;
             peakLevels[k][(size_t) c] = valueAt (curve.peaks, f0, f1) + tl;
         }
+        if (hasRef)
+            refLevels[(size_t) c] = valueAt (*reference, f0, f1) + tl;
     }
     auto xCol = [&] (int c) { return area.getX() + area.getWidth() * (float) c / (float) (cols - 1); };
+
+    int numTracks = 0;
+    for (auto key : order)
+        if (! curves.at (key).isSum) ++numTracks;
 
     g.saveState();
     g.reduceClipRegion (area.toNearestInt());
 
-    // Zonas de choque: donde la segunda pista más fuerte está cerca de la primera
-    if (multi)
+    // Zonas de choque (solo entre pistas, no con la suma)
+    if (collisions && numTracks > 1)
     {
         constexpr float floorDb = -54.0f;
         for (int c = 0; c < cols; ++c)
         {
             float a = -200.0f, s = -200.0f;
-            for (auto& lv : levels)
+            for (size_t k = 0; k < order.size(); ++k)
             {
-                const float v = lv[(size_t) c];
+                if (curves.at (order[k]).isSum) continue;
+                const float v = levels[k][(size_t) c];
                 if (v > a) { s = a; a = v; }
                 else if (v > s) s = v;
             }
             const float diff = a - s;
             if (s < floorDb || diff > 12.0f) continue;
-            const float loud = jlimit (0.0f, 1.0f, (s - floorDb) / 24.0f);
-            const float close = 1.0f - diff / 12.0f;
-            const float alpha = 0.6f * loud * close;
+            const float alpha = 0.6f * jlimit (0.0f, 1.0f, (s - floorDb) / 24.0f) * (1.0f - diff / 12.0f);
             if (alpha < 0.02f) continue;
             const float x = xCol (c);
             g.setColour (ScopeColours::warn.withAlpha (alpha));
@@ -818,55 +1032,108 @@ void SpectrumView::paint (Graphics& g)
         }
     }
 
-    for (size_t k = 0; k < order.size(); ++k)
+    // Referencia guardada (línea punteada)
+    if (hasRef)
     {
-        const auto colour = curves.at (order[k]).colour;
-        Path fill, line, peakLine;
+        Path refPath;
         for (int c = 0; c < cols; ++c)
         {
-            const float x = xCol (c), y = yOf (levels[k][(size_t) c]), yp = yOf (peakLevels[k][(size_t) c]);
-            if (c == 0)
+            const float x = xCol (c), y = yOf (refLevels[(size_t) c]);
+            if (c == 0) refPath.startNewSubPath (x, y);
+            else        refPath.lineTo (x, y);
+        }
+        Path dashed;
+        const float dashes[] = { 5.0f, 4.0f };
+        PathStrokeType (1.4f).createDashedStroke (dashed, refPath, dashes, 2);
+        g.setColour (ScopeColours::textBright.withAlpha (0.6f));
+        g.fillPath (dashed);
+    }
+
+    // Curvas: primero las pistas, la suma al final (blanca, encima)
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        for (size_t k = 0; k < order.size(); ++k)
+        {
+            const auto& curve = curves.at (order[k]);
+            if (curve.isSum != (pass == 1)) continue;
+
+            Path fill, line, peakLine;
+            for (int c = 0; c < cols; ++c)
             {
-                fill.startNewSubPath (x, area.getBottom());
-                fill.lineTo (x, y);
-                line.startNewSubPath (x, y);
-                peakLine.startNewSubPath (x, yp);
+                const float x = xCol (c), y = yOf (levels[k][(size_t) c]), yp = yOf (peakLevels[k][(size_t) c]);
+                if (c == 0)
+                {
+                    fill.startNewSubPath (x, area.getBottom());
+                    fill.lineTo (x, y);
+                    line.startNewSubPath (x, y);
+                    peakLine.startNewSubPath (x, yp);
+                }
+                else
+                {
+                    fill.lineTo (x, y);
+                    line.lineTo (x, y);
+                    peakLine.lineTo (x, yp);
+                }
+            }
+            fill.lineTo (area.getRight(), area.getBottom());
+            fill.closeSubPath();
+
+            if (curve.isSum)
+            {
+                g.setColour (ScopeColours::bg.withAlpha (0.6f));
+                g.strokePath (line, PathStrokeType (3.5f));
+                g.setColour (ScopeColours::textBright);
+                g.strokePath (line, PathStrokeType (1.6f));
+                continue;
+            }
+
+            if (numTracks > 1)
+            {
+                g.setColour (curve.colour.withAlpha (0.07f));
+                g.fillPath (fill);
             }
             else
             {
-                fill.lineTo (x, y);
-                line.lineTo (x, y);
-                peakLine.lineTo (x, yp);
+                g.setGradientFill (ColourGradient (curve.colour.withAlpha (0.42f), 0.0f, area.getY(),
+                                                   curve.colour.withAlpha (0.02f), 0.0f, area.getBottom(), false));
+                g.fillPath (fill);
+                g.setColour (ScopeColours::textBright.withAlpha (0.28f));
+                g.strokePath (peakLine, PathStrokeType (1.0f));
             }
+            g.setColour (curve.colour.withAlpha (0.18f));
+            g.strokePath (line, PathStrokeType (4.0f));
+            g.setColour (curve.colour);
+            g.strokePath (line, PathStrokeType (1.5f));
         }
-        fill.lineTo (area.getRight(), area.getBottom());
-        fill.closeSubPath();
-
-        if (multi)
-        {
-            g.setColour (colour.withAlpha (0.07f));
-            g.fillPath (fill);
-        }
-        else
-        {
-            g.setGradientFill (ColourGradient (colour.withAlpha (0.42f), 0.0f, area.getY(),
-                                               colour.withAlpha (0.02f), 0.0f, area.getBottom(), false));
-            g.fillPath (fill);
-            g.setColour (ScopeColours::textBright.withAlpha (0.28f));
-            g.strokePath (peakLine, PathStrokeType (1.0f));
-        }
-        g.setColour (colour.withAlpha (0.18f));
-        g.strokePath (line, PathStrokeType (4.0f));
-        g.setColour (colour);
-        g.strokePath (line, PathStrokeType (1.5f));
     }
     g.restoreState();
+
+    // Leyenda de la suma / referencia
+    {
+        auto legend = area.reduced (8.0f, 4.0f).removeFromTop (14.0f);
+        g.setFont (uiFont (10.0f, true));
+        bool anySum = false;
+        for (auto key : order) anySum = anySum || curves.at (key).isSum;
+        if (anySum)
+        {
+            g.setColour (ScopeColours::textBright);
+            g.drawText (u8 ("— suma de las pistas"), legend, Justification::topRight);
+            legend.removeFromTop (14.0f);
+        }
+        if (hasRef)
+        {
+            g.setColour (ScopeColours::textBright.withAlpha (0.7f));
+            const String nm = referenceName != nullptr && referenceName->isNotEmpty() ? *referenceName : String ("guardada");
+            g.drawText (u8 ("- - referencia: ") + nm, area.reduced (8.0f, 4.0f).withTrimmedTop (anySum ? 14.0f : 0.0f).removeFromTop (14.0f),
+                        Justification::topRight);
+        }
+    }
 
     // ---------- Lectura con el mouse ----------
     if (hoverPos.has_value() && area.contains (*hoverPos))
     {
         const float x = hoverPos->x;
-        const float f = minF * std::pow (maxF / minF, (x - area.getX()) / area.getWidth());
+        const float f = specMinF * std::pow (specMaxF / specMinF, (x - area.getX()) / area.getWidth());
 
         g.setColour (ScopeColours::textBright.withAlpha (0.45f));
         g.drawVerticalLine (roundToInt (x), area.getY(), area.getBottom());
@@ -878,17 +1145,20 @@ void SpectrumView::paint (Graphics& g)
         for (auto key : order)
         {
             const auto& curve = curves.at (key);
-            const float v = valueAt (curve.smoothed, f / 1.02f, f * 1.02f) + tilt (f);
-            items.push_back ({ curve.name, curve.colour, v });
-            g.setColour (curve.colour);
+            const float v = valueAt (curve.smoothed, f / 1.02f, f * 1.02f) + specTilt (f);
+            const auto col = curve.isSum ? ScopeColours::textBright : curve.colour;
+            items.push_back ({ curve.name, col, v });
+            g.setColour (col);
             g.fillEllipse (Rectangle<float> (7.0f, 7.0f).withCentre ({ x, yOf (v) }));
             g.setColour (ScopeColours::bg);
             g.drawEllipse (Rectangle<float> (7.0f, 7.0f).withCentre ({ x, yOf (v) }), 1.0f);
         }
+        if (hasRef)
+            items.push_back ({ "Referencia", ScopeColours::textBright.withAlpha (0.6f), valueAt (*reference, f / 1.02f, f * 1.02f) + specTilt (f) });
 
-        // Cuadro con frecuencia, nota y nivel de cada pista
+        const bool named = items.size() > 1;
         const float lineH = 15.0f;
-        const float boxW = multi ? 190.0f : 150.0f;
+        const float boxW = named ? 190.0f : 150.0f;
         const float boxH = 10.0f + lineH * (2.0f + (float) items.size());
         auto box = Rectangle<float> (x + 12.0f, area.getY() + 6.0f, boxW, boxH);
         if (box.getRight() > area.getRight()) box.setX (x - 12.0f - boxW);
@@ -914,10 +1184,10 @@ void SpectrumView::paint (Graphics& g)
             row.removeFromLeft (12.0f);
             g.setFont (uiFont (11.0f));
             g.setColour (ScopeColours::textBright);
-            if (multi)
+            if (named)
                 g.drawText (it.name, row, Justification::centredLeft, true);
             g.setFont (uiFont (11.0f, true));
-            g.drawText (String (it.db, 1) + " dB", row, multi ? Justification::centredRight : Justification::centredLeft);
+            g.drawText (String (it.db, 1) + " dB", row, named ? Justification::centredRight : Justification::centredLeft);
         }
     }
 }
@@ -935,6 +1205,22 @@ ScopeLabAudioProcessorEditor::ScopeLabAudioProcessorEditor (ScopeLabAudioProcess
     viewParam   = proc.apvts.getRawParameterValue ("view");
     splitParam  = proc.apvts.getRawParameterValue ("split");
     freezeParam = proc.apvts.getRawParameterValue ("freeze");
+    msParam     = proc.apvts.getRawParameterValue ("ms");
+    spectroParam = proc.apvts.getRawParameterValue ("spectro");
+
+    auto toggleParam = [this] (const String& id)
+    {
+        if (auto* param = proc.apvts.getParameter (id))
+        {
+            param->beginChangeGesture();
+            param->setValueNotifyingHost (param->getValue() > 0.5f ? 0.0f : 1.0f);
+            param->endChangeGesture();
+        }
+        refresh();
+    };
+    spectrum.onToggleMs          = [toggleParam] { toggleParam ("ms"); };
+    spectrum.onToggleSpectrogram = [toggleParam] { toggleParam ("spectro"); };
+    spectrum.setReference (&proc.referenceSpectrum, &proc.referenceName);
 
     addAndMakeVisible (trackBar);
     addAndMakeVisible (wave);
@@ -1094,23 +1380,108 @@ void ScopeLabAudioProcessorEditor::paint (Graphics& g)
     g.drawText ("SCOPE", h.removeFromLeft (68.0f), Justification::centredLeft);
     g.setColour (ScopeColours::left);
     g.drawText ("LAB", h.removeFromLeft (52.0f), Justification::centredLeft);
-    g.setColour (ScopeColours::text);
-    g.setFont (uiFont (12.0f));
-    g.drawText (u8 ("osciloscopio  ·  estéreo  ·  espectro  ·  multipista"), h.removeFromLeft (330.0f), Justification::centredLeft);
+    h.removeFromLeft (14.0f);
+    loudnessArea = h.removeFromLeft (390.0f).toNearestInt();
+    drawLoudness (g, loudnessArea.toFloat());
 
-    auto meters = headerArea.toFloat().removeFromRight (400.0f);
-    drawMeter (g, meters.removeFromLeft (190.0f).reduced (0, 8), holdL, ScopeColours::left, "L");
+    auto meters = headerArea.toFloat().removeFromRight (340.0f);
+    drawMeter (g, meters.removeFromLeft (160.0f).reduced (0, 8), holdL, ScopeColours::left, "L");
     meters.removeFromLeft (20.0f);
     drawMeter (g, meters.reduced (0, 8), holdR, ScopeColours::right, "R");
 
     if (freezeParam->load() > 0.5f)
     {
-        auto badge = Rectangle<float> (96.0f, 22.0f).withCentre ({ (float) headerArea.getRight() - 470.0f, headerArea.toFloat().getCentreY() });
+        auto badge = Rectangle<float> (96.0f, 22.0f).withCentre ({ (float) headerArea.getRight() - 400.0f, headerArea.toFloat().getCentreY() });
         g.setColour (ScopeColours::warn.withAlpha (0.2f));
         g.fillRoundedRectangle (badge, 4.0f);
         g.setColour (ScopeColours::warn);
         g.setFont (uiFont (11.0f, true));
         g.drawText ("CONGELADO", badge, Justification::centred);
+    }
+}
+
+void ScopeLabAudioProcessorEditor::drawLoudness (Graphics& g, Rectangle<float> r)
+{
+    auto fmt = [] (float v) { return v < -150.0f ? String (u8 ("—")) : String (v, 1); };
+    const float tpDb = Decibels::gainToDecibels (proc.loudness.getTruePeak(), -200.0f);
+    struct Item { const char* label; String value; Colour colour; };
+    const Item items[] = {
+        { "M",   fmt (proc.loudness.getMomentary()), ScopeColours::textBright },
+        { "S",   fmt (proc.loudness.getShortTerm()), ScopeColours::textBright },
+        { "INT", fmt (integratedLufs),               ScopeColours::mid },
+        { "TP",  fmt (tpDb),                         tpDb > -1.0f ? ScopeColours::warn : ScopeColours::textBright } };
+
+    g.setFont (uiFont (10.0f, true));
+    g.setColour (ScopeColours::text);
+    g.drawText ("LUFS", r.removeFromLeft (34.0f), Justification::centredLeft);
+    for (auto& it : items)
+    {
+        g.setFont (uiFont (10.0f, true));
+        g.setColour (ScopeColours::text);
+        const float lw = GlyphArrangement::getStringWidth (g.getCurrentFont(), it.label) + 4.0f;
+        g.drawText (it.label, r.removeFromLeft (lw), Justification::centredLeft);
+        g.setFont (uiFont (13.0f, true));
+        g.setColour (it.colour);
+        g.drawText (it.value, r.removeFromLeft (50.0f), Justification::centredLeft);
+        r.removeFromLeft (4.0f);
+    }
+    g.setFont (uiFont (10.0f));
+    g.setColour (ScopeColours::text.withAlpha (0.7f));
+    g.drawText ("clic = reset", r, Justification::centredLeft);
+}
+
+void ScopeLabAudioProcessorEditor::mouseDown (const MouseEvent& e)
+{
+    if (loudnessArea.contains (e.getPosition()))
+    {
+        proc.loudness.requestReset();
+        integratedLufs = -200.0f;
+        repaint (headerArea);
+    }
+}
+
+namespace
+{
+    // Busca el desplazamiento (en muestras de la señal decimada) que mejor alinea b con a.
+    // Devuelve la correlación con signo en ese punto; lag > 0 significa que b llega tarde.
+    float findBestLag (const std::vector<float>& a, const std::vector<float>& b, int maxLag, float& lagOut, float& energyA, float& energyB)
+    {
+        const int n = (int) jmin (a.size(), b.size());
+        const int start = maxLag, end = n - maxLag;
+        double ea = 0.0;
+        for (int t = start; t < end; ++t) ea += (double) a[(size_t) t] * a[(size_t) t];
+        energyA = (float) (ea / jmax (1, end - start));
+
+        std::vector<double> r ((size_t) (2 * maxLag + 1), 0.0);
+        int best = 0;
+        double bestAbs = -1.0, ebBest = 0.0;
+        for (int L = -maxLag; L <= maxLag; ++L)
+        {
+            double sab = 0.0, eb = 0.0;
+            for (int t = start; t < end; ++t)
+            {
+                const double bv = b[(size_t) (t + L)];
+                sab += a[(size_t) t] * bv;
+                eb += bv * bv;
+            }
+            const double v = (ea > 1.0e-12 && eb > 1.0e-12) ? sab / std::sqrt (ea * eb) : 0.0;
+            r[(size_t) (L + maxLag)] = v;
+            if (std::abs (v) > bestAbs) { bestAbs = std::abs (v); best = L; ebBest = eb; }
+        }
+        energyB = (float) (ebBest / jmax (1, end - start));
+
+        // Refinamiento parabólico para tener precisión por debajo de una muestra
+        double frac = 0.0;
+        const int i = best + maxLag;
+        if (i > 0 && i < (int) r.size() - 1)
+        {
+            const double y0 = std::abs (r[(size_t) i - 1]), y1 = std::abs (r[(size_t) i]), y2 = std::abs (r[(size_t) i + 1]);
+            const double den = y0 - 2.0 * y1 + y2;
+            if (std::abs (den) > 1.0e-12)
+                frac = jlimit (-0.5, 0.5, 0.5 * (y0 - y2) / den);
+        }
+        lagOut = (float) (best + frac);
+        return (float) r[(size_t) i];
     }
 }
 
@@ -1132,6 +1503,24 @@ void ScopeLabAudioProcessorEditor::updatePhase (std::vector<Track*>& tracks, Tra
         lowpass (refMono, refLow, me.sampleRate, 150.0f);
     }
 
+    // Alineación: ~340 ms de graves, decimados x8, buscando hasta ±20 ms (10 veces por segundo)
+    constexpr int alignLen = 16384, decim = 8;
+    const bool doAlign = aligned && (++frameCounter % 6 == 0);
+    auto decimatedLows = [this] (Track& t, std::vector<float>& out)
+    {
+        alignL.resize (alignLen); alignR.resize (alignLen); alignMono.resize (alignLen);
+        t.slot->buffer->read (t.alignedEnd, alignLen, alignL.data(), alignR.data());
+        for (int i = 0; i < alignLen; ++i)
+            alignMono[(size_t) i] = (alignL[(size_t) i] + alignR[(size_t) i]) * 0.5f;
+        lowpass (alignMono, alignLow, t.sampleRate, 150.0f);
+        out.resize (alignLen / decim);
+        for (int i = 0; i < alignLen / decim; ++i)
+            out[(size_t) i] = alignLow[(size_t) (i * decim)];
+    };
+    if (doAlign)
+        decimatedLows (me, alignRef);
+    const int maxLag = (int) std::ceil (0.02 * me.sampleRate / decim);
+
     std::set<int> seen;
     for (auto* t : tracks)
     {
@@ -1139,6 +1528,34 @@ void ScopeLabAudioProcessorEditor::updatePhase (std::vector<Track*>& tracks, Tra
         PhaseView::Row row;
         row.name = t->name;
         row.colour = t->colour;
+
+        if (doAlign)
+        {
+            decimatedLows (*t, alignOther);
+            float lag = 0.0f, ea = 0.0f, eb = 0.0f;
+            const float corr = findBestLag (alignRef, alignOther, maxLag, lag, ea, eb);
+            const float lagMs = lag * (float) decim / (float) me.sampleRate * 1000.0f;
+            const bool valid = ea > 1.0e-7f && eb > 1.0e-7f && std::abs (corr) > 0.5f;
+
+            auto& ai = alignInfo[t->key];
+            if (valid)
+            {
+                if (ai.valid && std::abs (lagMs - ai.lagMs) < 1.0f) ai.lagMs += (lagMs - ai.lagMs) * 0.35f;
+                else                                                ai.lagMs = lagMs;
+                ai.corr = corr;
+            }
+            ai.valid = valid;
+        }
+        if (aligned)
+        {
+            auto it = alignInfo.find (t->key);
+            if (it != alignInfo.end())
+            {
+                row.alignValid = it->second.valid;
+                row.lagMs = it->second.lagMs;
+                row.alignCorr = it->second.corr;
+            }
+        }
 
         if (aligned)
         {
@@ -1165,6 +1582,8 @@ void ScopeLabAudioProcessorEditor::updatePhase (std::vector<Track*>& tracks, Tra
 
     for (auto it = corrSmooth.begin(); it != corrSmooth.end();)
         it = seen.count (it->first) ? std::next (it) : corrSmooth.erase (it);
+    for (auto it = alignInfo.begin(); it != alignInfo.end();)
+        it = seen.count (it->first) ? std::next (it) : alignInfo.erase (it);
 
     phase.setRows (std::move (rows), me.name + u8 ("  (esta)"), me.colour, message);
 }
@@ -1188,6 +1607,7 @@ void ScopeLabAudioProcessorEditor::refresh()
     };
     updateMeter (proc.peakLeft.exchange (0.0f),  holdL, holdCounterL);
     updateMeter (proc.peakRight.exchange (0.0f), holdR, holdCounterR);
+    integratedLufs = proc.loudness.computeIntegrated();
     repaint (headerArea);
 
     // ---------- Pistas disponibles ----------
@@ -1447,13 +1867,40 @@ void ScopeLabAudioProcessorEditor::refresh()
     // ---------- Espectro ----------
     constexpr int N = SpectrumView::fftSize;
     specL.resize (N); specR.resize (N); specMono.resize (N);
-    spectrum.beginFrame (sr);
-    for (auto* t : shown)
+    const bool msOn = ! multi && msParam->load() > 0.5f;
+    spectrum.setOptions (! multi, msOn, spectroParam->load() > 0.5f);
+    spectrum.beginFrame (sr, multi);
+
+    if (msOn)
     {
-        t->slot->buffer->read (multi ? t->alignedEnd : t->end, N, specL.data(), specR.data());
+        // Mid = lo que está en el centro, Side = lo que está abierto a los costados
+        me.slot->buffer->read (me.end, N, specL.data(), specR.data());
         for (int i = 0; i < N; ++i)
             specMono[(size_t) i] = (specL[(size_t) i] + specR[(size_t) i]) * 0.5f;
-        spectrum.pushTrack (t->key, specMono.data(), multi ? t->colour : ScopeColours::left, t->name);
+        spectrum.pushTrack (-2, specMono.data(), ScopeColours::left, "Mid");
+        for (int i = 0; i < N; ++i)
+            specMono[(size_t) i] = (specL[(size_t) i] - specR[(size_t) i]) * 0.5f;
+        spectrum.pushTrack (-3, specMono.data(), ScopeColours::right, "Side");
+    }
+    else
+    {
+        std::vector<float> sum;
+        if (multi && shown.size() >= 2)
+            sum.assign ((size_t) N, 0.0f);
+
+        for (auto* t : shown)
+        {
+            t->slot->buffer->read (multi ? t->alignedEnd : t->end, N, specL.data(), specR.data());
+            for (int i = 0; i < N; ++i)
+                specMono[(size_t) i] = (specL[(size_t) i] + specR[(size_t) i]) * 0.5f;
+            if (! sum.empty())
+                for (int i = 0; i < N; ++i) sum[(size_t) i] += specMono[(size_t) i];
+            spectrum.pushTrack (t->key, specMono.data(), multi ? t->colour : ScopeColours::left, t->name);
+        }
+
+        // Suma real de las pistas (en el tiempo): muestra lo que se pierde cuando se cancelan
+        if (! sum.empty())
+            spectrum.pushTrack (-1, sum.data(), ScopeColours::textBright, "Suma", true);
     }
     spectrum.endFrame();
 

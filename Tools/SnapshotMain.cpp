@@ -18,7 +18,7 @@ struct FakePlayHead : juce::AudioPlayHead
     }
 };
 
-enum class Part { kick, bass, pad, full };
+enum class Part { kick, kickTop, bass, pad, full };
 
 struct DemoSignal
 {
@@ -32,13 +32,22 @@ struct DemoSignal
         const double twoPi = juce::MathConstants<double>::twoPi;
         for (int i = 0; i < n; ++i)
         {
-            const double t = (double) (startSample + i) / sr;
+            const double t = (double) (startSample + i) / sr - (part == Part::kickTop ? 0.0035 : 0.0);   // capa 3.5 ms tarde
             const double beat = t * bpm / 60.0;
             const double tk = (beat - std::floor (beat)) * 60.0 / bpm;
             const double hb = beat + 0.5;
             const double th = (hb - std::floor (hb)) * 60.0 / bpm;
 
             double l = 0.0, r = 0.0;
+
+            if (part == Part::kickTop)
+            {
+                // Capa de bombo (otro sample): mismo cuerpo, más "click"
+                const double kPhase = twoPi * (48.0 * tk + 90.0 / 28.0 * (1.0 - std::exp (-28.0 * tk)));
+                const double body = 0.55 * std::sin (kPhase) * std::exp (-tk * 9.0);
+                const double click = 0.25 * std::sin (twoPi * 2800.0 * tk) * std::exp (-tk * 120.0);
+                l += body + click; r += body + click;
+            }
 
             if (part == Part::kick || part == Part::full)
             {
@@ -115,6 +124,7 @@ int main (int argc, char* argv[])
     std::vector<std::unique_ptr<SimTrack>> tracks;
     tracks.push_back (std::make_unique<SimTrack> (Part::kick, "Kick", juce::Colour (0xffff6f3c), sr, block));
     tracks.push_back (std::make_unique<SimTrack> (Part::bass, "Bass", juce::Colour (0xff3ec7ff), sr, block));
+    tracks.push_back (std::make_unique<SimTrack> (Part::kickTop, "Kick Top", juce::Colour (0xffffd84a), sr, block));
     tracks.push_back (std::make_unique<SimTrack> (Part::pad,  "Pad",  juce::Colour (0xffc46cff), sr, block));
 
     int64_t pos = 0;
@@ -181,38 +191,34 @@ int main (int argc, char* argv[])
         sv.setHover (juce::Point<float> (left + (right - left) * t, (float) sv.getHeight() * 0.5f));
     };
 
-    // 1) Multipista, 4 compases, separadas, con lectura del mouse en 62 Hz
-    setParam ("view", 1); setParam ("sync", 2); setParam ("beats", 6); setParam ("split", 1.0f);
-    settle (60);
-    feedToBeatFraction (16.0, 0.8);
+    // 1) Multipista: alineación, suma y LUFS
+    setParam ("view", 1); setParam ("sync", 2); setParam ("beats", 2); setParam ("split", 0.0f);
+    settle (90);
+    feedToBeatFraction (1.0, 0.97);
     hoverAtHz (62.0f);
     editor->refresh();
-    save ("06_cuatro_compases.png");
+    save ("10_alineacion_suma.png");
 
-    // 2) 1 compás superpuestas (tienen que verse 4 golpes)
-    setParam ("beats", 4); setParam ("split", 0.0f);
-    settle (30);
-    feedToBeatFraction (4.0, 0.95);
+    // 2) Guardar referencia (la suma) y comparar con el Kick solo en Mid/Side, espectro ampliado
     editor->getSpectrumView().setHover (std::nullopt);
-    editor->refresh();
-    save ("07_un_compas.png");
-
-    // 3) Espectro ampliado con lectura del mouse
+    settle (120);
+    editor->getSpectrumView().toggleReference();
+    setParam ("view", 0); setParam ("ms", 1.0f);
     editor->setFocusPanel (2);
-    settle (10);
-    hoverAtHz (110.0f);
+    settle (90);
+    hoverAtHz (120.0f);
     editor->refresh();
-    save ("08_espectro_ampliado.png");
+    save ("11_referencia_midside.png");
 
-    // 4) Osciloscopio ampliado, vista de una pista con zoom +6 dB
+    // 3) Cascada (espectrograma) de la suma, ampliada
     editor->getSpectrumView().setHover (std::nullopt);
-    editor->setFocusPanel (1);
-    setParam ("view", 0); setParam ("beats", 2); setParam ("gain", 6.0f);
-    settle (20);
-    feedToBeatFraction (1.0, 0.6);
-    save ("09_osciloscopio_ampliado.png");
+    editor->getSpectrumView().toggleReference();
+    setParam ("ms", 0.0f); setParam ("view", 1); setParam ("spectro", 1.0f);
+    settle (2);
+    settle (700);
+    save ("12_cascada.png");
+    setParam ("spectro", 0.0f);
     editor->setFocusPanel (0);
-    setParam ("gain", 0.0f);
 
     ed.reset();
     tracks.clear();

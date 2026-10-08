@@ -1,4 +1,4 @@
-![ScopeLab](docs/06_cuatro_compases.png)
+![ScopeLab](docs/10_alineacion_suma.png)
 
 # ScopeLab
 
@@ -30,6 +30,12 @@ Para que se alineen, el DAW tiene que estar en Play. En Ableton los nombres y co
 - **Lectura con el mouse** en el espectro: frecuencia, nota (C3 = Do central, como Ableton) y nivel de cada pista.
 - **Ampliar paneles**: el ícono de flechas de cada panel, o un doble clic, agranda el osciloscopio o el espectro a toda la ventana.
 - Duraciones con tempo de **1/4 de tiempo a 4 compases**.
+- **LUFS** momentáneo, corto e integrado (EBU R128) y **true peak**, arriba. Un clic sobre los valores los reinicia.
+- **Alineación entre pistas**: te dice cuántos ms llega tarde o temprano cada pista respecto a la tuya, qué valor poner en el *Track Delay* de Ableton y si conviene invertir la fase (Utility → Ø).
+- **Suma de las pistas** en el espectro, en blanco: muestra lo que realmente queda cuando se suman (si se cancelan, la curva baja).
+- **MID/SIDE**: separa el espectro de una pista en centro y costados.
+- **GUARDAR REF**: congela la curva actual como referencia punteada, para comparar.
+- **CASCADA**: espectrograma que muestra cómo cambia el espectro en el tiempo.
 - Medidores de pico, **zoom vertical** y botón **Congelar**.
 
 ## Conseguir el plugin compilado

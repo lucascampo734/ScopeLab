@@ -2,6 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
+#include <array>
 #include <map>
 #include <optional>
 #include <set>
@@ -92,6 +93,8 @@ public:
         juce::Colour colour;
         float lowCorr = 0.0f, fullCorr = 0.0f;
         bool hasSignal = false;
+        bool alignValid = false;
+        float lagMs = 0.0f, alignCorr = 0.0f;   // lag > 0: esta pista llega tarde
     };
 
     void setRows (std::vector<Row> newRows, const juce::String& refName, juce::Colour refColour, const juce::String& message);
@@ -135,10 +138,14 @@ public:
     static constexpr int fftSize  = 1 << fftOrder;
 
     SpectrumView();
-    void beginFrame (double sampleRate);
-    void pushTrack (int key, const float* mono, juce::Colour colour, const juce::String& name);   // fftSize muestras
+    void beginFrame (double sampleRate, bool showCollisions);
+    void pushTrack (int key, const float* mono, juce::Colour colour, const juce::String& name, bool isSum = false);   // fftSize muestras
     void endFrame();
     void paint (juce::Graphics&) override;
+
+    void setOptions (bool msAvailable, bool msEnabled, bool spectrogramEnabled);
+    void setReference (std::vector<float>* curve, juce::String* name) { reference = curve; referenceName = name; }
+    void toggleReference();
 
     void setExpanded (bool e) { expanded = e; repaint(); }
     void setHover (std::optional<juce::Point<float>> p) { hoverPos = p; repaint(); }
@@ -148,22 +155,33 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
-    std::function<void()> onExpandToggle;
+    std::function<void()> onExpandToggle, onToggleMs, onToggleSpectrogram;
 
 private:
     struct Curve
     {
-        std::vector<float> smoothed, peaks;
+        std::vector<float> smoothed, peaks, average;
         juce::Colour colour;
         juce::String name;
-        bool touched = false;
+        bool touched = false, isSum = false;
     };
 
-    std::optional<juce::Point<float>> hoverPos;
-    juce::Rectangle<float> expandIcon;
-    bool expanded = false;
-
     float valueAt (const std::vector<float>& bins, float f0, float f1) const;
+    int mainCurveKey() const;
+    void pushSpectrogramColumn();
+    void paintSpectrogram (juce::Graphics&, juce::Rectangle<float> area, juce::Rectangle<float> leftLabels, juce::Rectangle<float> bottomLabels);
+    bool hitsHeaderControl (juce::Point<float> p) const;
+
+    std::optional<juce::Point<float>> hoverPos;
+    juce::Rectangle<float> expandIcon, msChip, refChip, spectroChip, lastPlot;
+    bool expanded = false, collisions = false, msAvailable = false, msOn = false, spectroOn = false;
+
+    std::vector<float>* reference = nullptr;
+    juce::String* referenceName = nullptr;
+
+    juce::Image spectroImage;
+    std::array<juce::Colour, 256> lut;
+    int spectroKey = 0;
 
     juce::dsp::FFT fft { fftOrder };
     juce::dsp::WindowingFunction<float> window { (size_t) fftSize, juce::dsp::WindowingFunction<float>::hann, false };
@@ -207,6 +225,8 @@ private:
 
     void timerCallback() override { refresh(); }
     void drawMeter (juce::Graphics&, juce::Rectangle<float>, float level, juce::Colour, const juce::String& name);
+    void drawLoudness (juce::Graphics&, juce::Rectangle<float>);
+    void mouseDown (const juce::MouseEvent&) override;
     void updatePhase (std::vector<Track*>& tracks, Track& me, bool aligned);
 
     using SliderAttachment   = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -238,6 +258,15 @@ private:
     std::atomic<float>* viewParam   = nullptr;
     std::atomic<float>* splitParam  = nullptr;
     std::atomic<float>* freezeParam = nullptr;
+    std::atomic<float>* msParam     = nullptr;
+    std::atomic<float>* spectroParam = nullptr;
+
+    struct AlignInfo { float lagMs = 0.0f, corr = 0.0f; bool valid = false; };
+    std::map<int, AlignInfo> alignInfo;
+    std::vector<float> alignL, alignR, alignMono, alignLow, alignRef, alignOther;
+    int frameCounter = 0;
+    float integratedLufs = -200.0f;
+    juce::Rectangle<int> loudnessArea;
 
     std::set<int> hiddenKeys;
     std::map<int, std::pair<float, float>> corrSmooth;

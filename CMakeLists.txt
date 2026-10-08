@@ -46,6 +46,11 @@ target_sources(ScopeLab PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp)
 
+# Visual Studio: leer los archivos como UTF-8 (acentos, flechas, etc.)
+if(MSVC)
+    target_compile_options(ScopeLab PRIVATE /utf-8)
+endif()
+
 target_compile_definitions(ScopeLab PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0

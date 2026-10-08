@@ -26,7 +26,16 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Compilar
-        run: cmake --build build --config Release --parallel 4
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build --config Release --parallel 4 2>&1 | tee build.log || {
+            # Mostrar los errores como anotaciones para poder leerlos sin abrir el log completo
+            grep -E "error( C[0-9]+)?:|error [A-Z]+[0-9]+:" build.log | sort -u | head -n 10 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+            exit 1
+          }
 
       - name: Firmar (ad-hoc) en Mac
         if: runner.os == 'macOS'

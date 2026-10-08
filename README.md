@@ -1,4 +1,4 @@
-![ScopeLab](docs/04_multi_superpuestas.png)
+![ScopeLab](docs/06_cuatro_compases.png)
 
 # ScopeLab
 
@@ -23,9 +23,13 @@ Para que se alineen, el DAW tiene que estar en Play. En Ableton los nombres y co
 - **Osciloscopio** con tres modos de sincronía:
   - *Libre*: muestra la ventana de tiempo elegida.
   - *Trigger*: se engancha al cruce por cero de los graves para que la onda quede quieta.
-  - *Tempo del DAW*: la ventana dura entre 1/4 de tiempo y 1 compás, y se dibuja con barrido como un osciloscopio real.
+  - *Tempo del DAW*: la ventana dura entre 1/4 de tiempo y 4 compases, y se dibuja con barrido como un osciloscopio real.
 - Vista **Esta pista (L/R)** con goniómetro (Mid/Side) y medidor de correlación L/R.
 - **Espectro** FFT 4096 logarítmico, con pendiente de 4.5 dB/oct.
+- **Escala en dB** en el osciloscopio, que se ajusta sola con el zoom vertical.
+- **Lectura con el mouse** en el espectro: frecuencia, nota (C3 = Do central, como Ableton) y nivel de cada pista.
+- **Ampliar paneles**: el ícono de flechas de cada panel, o un doble clic, agranda el osciloscopio o el espectro a toda la ventana.
+- Duraciones con tempo de **1/4 de tiempo a 4 compases**.
 - Medidores de pico, **zoom vertical** y botón **Congelar**.
 
 ## Conseguir el plugin compilado

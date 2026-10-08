@@ -47,7 +47,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ScopeLabAudioProcessor::crea
 
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { "beats", 1 }, "Tiempos",
-        StringArray { "1/4 tiempo", "1/2 tiempo", "1 tiempo", "2 tiempos", String::fromUTF8 ("1 compás") }, 2));
+        StringArray { "1/4 tiempo", "1/2 tiempo", "1 tiempo", "2 tiempos", String::fromUTF8 ("1 compás"),
+                      "2 compases", "4 compases" }, 2));
 
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { "view", 1 }, "Vista", StringArray { "Esta pista (L/R)", "Multipista" }, 1));
@@ -73,7 +74,11 @@ bool ScopeLabAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
 
 void ScopeLabAudioProcessor::updateTrackProperties (const TrackProperties& properties)
 {
-    getSlot().setHostInfo (properties.name, properties.colour);
+    // Ableton a veces manda "ScopeLab/BASS": nos quedamos con el nombre de la pista
+    auto name = properties.name;
+    if (name.startsWithIgnoreCase (getName() + "/"))
+        name = name.fromFirstOccurrenceOf ("/", false, false);
+    getSlot().setHostInfo (name.trim(), properties.colour);
 }
 
 void ScopeLabAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)

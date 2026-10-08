@@ -31,9 +31,60 @@ namespace
 
     Colour correlationColour (float c)
     {
-        if (c < 0.0f)  return ScopeColours::warn;
+        if (c < -0.1f) return ScopeColours::warn;
         if (c < 0.3f)  return ScopeColours::caution;
         return ScopeColours::mid;
+    }
+
+    // Ícono de ampliar / reducir (dos flechas en diagonal)
+    void drawExpandIcon (Graphics& g, Rectangle<float> r, bool expanded)
+    {
+        g.setColour (ScopeColours::text);
+        const auto c = r.getCentre();
+        const float d = r.getWidth() * 0.5f - 2.0f, a = 4.0f;
+        Path p;
+        if (! expanded)
+        {
+            p.startNewSubPath (c.x + d - a, c.y - d); p.lineTo (c.x + d, c.y - d); p.lineTo (c.x + d, c.y - d + a);
+            p.startNewSubPath (c.x - d + a, c.y + d); p.lineTo (c.x - d, c.y + d); p.lineTo (c.x - d, c.y + d - a);
+            p.startNewSubPath (c.x + d, c.y - d); p.lineTo (c.x + 1.5f, c.y - 1.5f);
+            p.startNewSubPath (c.x - d, c.y + d); p.lineTo (c.x - 1.5f, c.y + 1.5f);
+        }
+        else
+        {
+            p.startNewSubPath (c.x + 1.5f, c.y - 1.5f - a); p.lineTo (c.x + 1.5f, c.y - 1.5f); p.lineTo (c.x + 1.5f + a, c.y - 1.5f);
+            p.startNewSubPath (c.x - 1.5f, c.y + 1.5f + a); p.lineTo (c.x - 1.5f, c.y + 1.5f); p.lineTo (c.x - 1.5f - a, c.y + 1.5f);
+            p.startNewSubPath (c.x + d, c.y - d); p.lineTo (c.x + 1.5f, c.y - 1.5f);
+            p.startNewSubPath (c.x - d, c.y + d); p.lineTo (c.x - 1.5f, c.y + 1.5f);
+        }
+        g.strokePath (p, PathStrokeType (1.4f, PathStrokeType::mitered, PathStrokeType::rounded));
+    }
+
+    String formatHz (float f)
+    {
+        if (f < 100.0f)  return String (f, 1) + " Hz";
+        if (f < 1000.0f) return String (roundToInt (f)) + " Hz";
+        return String (f / 1000.0f, 2) + " kHz";
+    }
+
+    // Nota con la convención de Ableton (Do central = C3) y desvío en cents
+    String noteName (float f)
+    {
+        static const char* names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        const float midi = 69.0f + 12.0f * std::log2 (f / 440.0f);
+        const int n = roundToInt (midi);
+        const int cents = roundToInt ((midi - (float) n) * 100.0f);
+        String s = String (names[((n % 12) + 12) % 12]) + String (n / 12 - 2);
+        if (cents != 0) s << "  " << (cents > 0 ? "+" : "") << cents << u8 ("¢");
+        return s;
+    }
+
+    String formatDb (float db)
+    {
+        if (std::abs (db) < 0.05f) return "0";
+        const bool whole = std::abs (db - (float) roundToInt (db)) < 0.15f;   // -6.02 -> "-6"
+        if (whole) db = (float) roundToInt (db);
+        return (db > 0.0f ? "+" : "") + (whole ? String (roundToInt (db)) : String (db, 1));
     }
 
     // Filtro pasa-bajos de 2 polos (aprox. 150 Hz) para medir la fase en graves
@@ -131,12 +182,12 @@ void ScopeLookAndFeel::drawComboBox (Graphics& g, int w, int h, bool, int, int, 
 
 //==============================================================================
 void WaveformView::setData (std::vector<ScopeSeries> newSeries, std::vector<std::vector<int>> newLanes, float g,
-                            int divs, const String& label, float sw, const String& st)
+                            int divs, const String& label, float sw, const String& st, bool showLRLegend)
 {
     series = std::move (newSeries);
     lanes = std::move (newLanes);
     gain = g; divisions = jmax (1, divs);
-    divLabel = label; sweep = sw; status = st;
+    divLabel = label; sweep = sw; status = st; showLegend = showLRLegend;
     repaint();
 }
 
@@ -217,18 +268,47 @@ void WaveformView::drawSeries (Graphics& g, Rectangle<float> lane, const ScopeSe
 
 void WaveformView::drawLane (Graphics& g, Rectangle<float> lane, const std::vector<int>& indices)
 {
-    g.setColour (ScopeColours::grid);
+    auto axis = lane.removeFromLeft (dbAxisWidth);
+    const float cy = lane.getCentreY();
+    const float halfH = lane.getHeight() * 0.5f * 0.92f;   // igual que en drawSeries
+
+    // Grilla vertical (tiempo)
     for (int i = 1; i < divisions; ++i)
     {
         const float x = lane.getX() + lane.getWidth() * (float) i / (float) divisions;
         g.setColour (divisions >= 8 && i % 4 == 0 ? ScopeColours::gridStrong : ScopeColours::grid);
         g.drawVerticalLine (roundToInt (x), lane.getY(), lane.getBottom());
     }
-    g.setColour (ScopeColours::grid);
-    for (float v : { -0.5f, 0.5f })
-        g.drawHorizontalLine (roundToInt (lane.getCentreY() - v * lane.getHeight() * 0.46f), lane.getX(), lane.getRight());
+
+    // Grilla horizontal en dB: 1 = pico a 0 dBFS con zoom 0; cada línea es la mitad (-6 dB)
+    g.setFont (uiFont (10.0f));
+    float lastLabelY = -1000.0f;
+    for (float frac : { 1.0f, 0.5f, 0.25f, 0.125f })
+    {
+        const float off = frac * halfH;
+        if (off < 24.0f) break;
+        const float db = Decibels::gainToDecibels (frac / gain);
+        for (float sign : { 1.0f, -1.0f })
+        {
+            const float y = cy - sign * off;
+            g.setColour (frac > 0.9f ? ScopeColours::gridStrong.withAlpha (0.7f) : ScopeColours::grid);
+            g.drawHorizontalLine (roundToInt (y), lane.getX(), lane.getRight());
+        }
+        // etiqueta solo arriba del centro, si no se pisa con la anterior
+        const float y = cy - off;
+        if (std::abs (y - lastLabelY) >= 11.0f)
+        {
+            g.setColour (ScopeColours::text);
+            g.drawText (formatDb (db), Rectangle<float> (axis.getX(), y - 6.0f, axis.getWidth() - 4.0f, 12.0f),
+                        Justification::centredRight);
+            if (lane.getHeight() > 150.0f)
+                g.drawText (formatDb (db), Rectangle<float> (axis.getX(), cy + off - 6.0f, axis.getWidth() - 4.0f, 12.0f),
+                            Justification::centredRight);
+            lastLabelY = y;
+        }
+    }
     g.setColour (ScopeColours::gridStrong);
-    g.drawHorizontalLine (roundToInt (lane.getCentreY()), lane.getX(), lane.getRight());
+    g.drawHorizontalLine (roundToInt (cy), lane.getX(), lane.getRight());
 
     g.saveState();
     g.reduceClipRegion (lane.toNearestInt());
@@ -252,6 +332,7 @@ void WaveformView::paint (Graphics& g)
     auto b = getLocalBounds().toFloat();
     drawPanel (g, b);
     const auto fullArea = b.reduced (10.0f, 8.0f).withTrimmedTop (18.0f);
+    const auto plotArea = fullArea.withTrimmedLeft (dbAxisWidth);
 
     const int numLanes = jmax (1, (int) lanes.size());
     const float gap = numLanes > 1 ? 4.0f : 0.0f;
@@ -262,27 +343,37 @@ void WaveformView::paint (Graphics& g)
 
     if (sweep >= 0.0f)
     {
-        const float x = fullArea.getX() + fullArea.getWidth() * sweep;
+        const float x = plotArea.getX() + plotArea.getWidth() * sweep;
         g.setColour (Colours::black.withAlpha (0.28f));
-        g.fillRect (Rectangle<float>::leftTopRightBottom (x, fullArea.getY(), fullArea.getRight(), fullArea.getBottom()));
+        g.fillRect (Rectangle<float>::leftTopRightBottom (x, plotArea.getY(), plotArea.getRight(), plotArea.getBottom()));
         g.setColour (ScopeColours::textBright.withAlpha (0.55f));
-        g.drawVerticalLine (roundToInt (x), fullArea.getY(), fullArea.getBottom());
+        g.drawVerticalLine (roundToInt (x), plotArea.getY(), plotArea.getBottom());
     }
 
     auto header = b.reduced (12.0f, 6.0f).removeFromTop (16.0f);
+    expandIcon = header.removeFromRight (16.0f);
+    drawExpandIcon (g, expandIcon, expanded);
+    header.removeFromRight (10.0f);
+
     g.setFont (uiFont (12.0f, true));
     g.setColour (ScopeColours::textBright);
     g.drawText ("OSCILOSCOPIO", header, Justification::centredLeft);
+    g.setFont (uiFont (10.0f));
+    g.setColour (ScopeColours::text.withAlpha (0.7f));
+    g.drawText ("dB", Rectangle<float> (fullArea.getX(), fullArea.getBottom() - 12.0f, dbAxisWidth - 4.0f, 12.0f),
+                Justification::centredRight);
 
-    // Leyenda (solo vista L/R, en multipista los colores están en la barra de pistas)
     auto legend = header.withTrimmedLeft (110.0f);
-    if (series.size() <= 2)
+    g.setFont (uiFont (12.0f, true));
+    if (showLegend)
+    {
         for (auto& s : series)
         {
             g.setColour (s.colour);
             g.drawText (s.label, legend.removeFromLeft (18.0f), Justification::centredLeft);
         }
-    else
+    }
+    else if (series.size() > 2 || (series.size() == 2 && lanes.size() == 1))
     {
         g.setColour (ScopeColours::textBright.withAlpha (0.8f));
         g.setFont (uiFont (11.0f));
@@ -297,6 +388,18 @@ void WaveformView::paint (Graphics& g)
         g.setColour (ScopeColours::caution);
         g.drawText (status, header.withTrimmedLeft (220.0f).withTrimmedRight (190.0f), Justification::centred);
     }
+}
+
+void WaveformView::mouseDown (const MouseEvent& e)
+{
+    if (expandIcon.expanded (4.0f).contains (e.position) && onExpandToggle)
+        onExpandToggle();
+}
+
+void WaveformView::mouseDoubleClick (const MouseEvent& e)
+{
+    if (! expandIcon.expanded (4.0f).contains (e.position) && onExpandToggle)
+        onExpandToggle();
 }
 
 //==============================================================================
@@ -536,7 +639,7 @@ void SpectrumView::beginFrame (double sr)
         c.touched = false;
 }
 
-void SpectrumView::pushTrack (int key, const float* mono, Colour colour)
+void SpectrumView::pushTrack (int key, const float* mono, Colour colour, const String& name)
 {
     auto& curve = curves[key];
     if (curve.smoothed.empty())
@@ -545,6 +648,7 @@ void SpectrumView::pushTrack (int key, const float* mono, Colour colour)
         curve.peaks.assign ((size_t) fftSize / 2 + 1, -120.0f);
     }
     curve.colour = colour;
+    curve.name = name;
     curve.touched = true;
     order.push_back (key);
 
@@ -589,6 +693,18 @@ float SpectrumView::valueAt (const std::vector<float>& bins, float f0, float f1)
     return mx;
 }
 
+void SpectrumView::mouseDown (const MouseEvent& e)
+{
+    if (expandIcon.expanded (4.0f).contains (e.position) && onExpandToggle)
+        onExpandToggle();
+}
+
+void SpectrumView::mouseDoubleClick (const MouseEvent& e)
+{
+    if (! expandIcon.expanded (4.0f).contains (e.position) && onExpandToggle)
+        onExpandToggle();
+}
+
 void SpectrumView::paint (Graphics& g)
 {
     auto b = getLocalBounds().toFloat();
@@ -599,6 +715,10 @@ void SpectrumView::paint (Graphics& g)
     auto freqLabels = area.removeFromBottom (14.0f);
     auto dbLabels = area.removeFromLeft (30.0f);
     freqLabels.removeFromLeft (30.0f);
+
+    expandIcon = header.removeFromRight (16.0f).translated (-2.0f, 0.0f);
+    drawExpandIcon (g, expandIcon, expanded);
+    header.removeFromRight (10.0f);
 
     const bool multi = order.size() > 1;
 
@@ -639,7 +759,8 @@ void SpectrumView::paint (Graphics& g)
         if (f >= 20000.0f) lr.setRight (x);
         g.drawText (label, lr, just);
     }
-    for (float db = 0.0f; db >= bottomDb + 1.0f; db -= 12.0f)
+    const float dbStep = area.getHeight() > 360.0f ? 6.0f : 12.0f;
+    for (float db = 0.0f; db >= bottomDb + 1.0f; db -= dbStep)
     {
         const float y = yOf (db);
         g.setColour (std::abs (db) < 0.5f ? ScopeColours::gridStrong : ScopeColours::grid);
@@ -740,6 +861,65 @@ void SpectrumView::paint (Graphics& g)
         g.strokePath (line, PathStrokeType (1.5f));
     }
     g.restoreState();
+
+    // ---------- Lectura con el mouse ----------
+    if (hoverPos.has_value() && area.contains (*hoverPos))
+    {
+        const float x = hoverPos->x;
+        const float f = minF * std::pow (maxF / minF, (x - area.getX()) / area.getWidth());
+
+        g.setColour (ScopeColours::textBright.withAlpha (0.45f));
+        g.drawVerticalLine (roundToInt (x), area.getY(), area.getBottom());
+        g.setColour (ScopeColours::textBright.withAlpha (0.15f));
+        g.drawHorizontalLine (roundToInt (hoverPos->y), area.getX(), area.getRight());
+
+        struct Item { String name; Colour colour; float db; };
+        std::vector<Item> items;
+        for (auto key : order)
+        {
+            const auto& curve = curves.at (key);
+            const float v = valueAt (curve.smoothed, f / 1.02f, f * 1.02f) + tilt (f);
+            items.push_back ({ curve.name, curve.colour, v });
+            g.setColour (curve.colour);
+            g.fillEllipse (Rectangle<float> (7.0f, 7.0f).withCentre ({ x, yOf (v) }));
+            g.setColour (ScopeColours::bg);
+            g.drawEllipse (Rectangle<float> (7.0f, 7.0f).withCentre ({ x, yOf (v) }), 1.0f);
+        }
+
+        // Cuadro con frecuencia, nota y nivel de cada pista
+        const float lineH = 15.0f;
+        const float boxW = multi ? 190.0f : 150.0f;
+        const float boxH = 10.0f + lineH * (2.0f + (float) items.size());
+        auto box = Rectangle<float> (x + 12.0f, area.getY() + 6.0f, boxW, boxH);
+        if (box.getRight() > area.getRight()) box.setX (x - 12.0f - boxW);
+
+        g.setColour (ScopeColours::bg.withAlpha (0.92f));
+        g.fillRoundedRectangle (box, 5.0f);
+        g.setColour (ScopeColours::gridStrong);
+        g.drawRoundedRectangle (box, 5.0f, 1.0f);
+
+        auto inner = box.reduced (9.0f, 5.0f);
+        g.setFont (uiFont (13.0f, true));
+        g.setColour (ScopeColours::textBright);
+        g.drawText (formatHz (f), inner.removeFromTop (lineH), Justification::centredLeft);
+        g.setFont (uiFont (11.0f));
+        g.setColour (ScopeColours::text);
+        g.drawText (u8 ("nota ") + noteName (f), inner.removeFromTop (lineH), Justification::centredLeft);
+
+        for (auto& it : items)
+        {
+            auto row = inner.removeFromTop (lineH);
+            g.setColour (it.colour);
+            g.fillEllipse (Rectangle<float> (7.0f, 7.0f).withCentre ({ row.getX() + 3.5f, row.getCentreY() }));
+            row.removeFromLeft (12.0f);
+            g.setFont (uiFont (11.0f));
+            g.setColour (ScopeColours::textBright);
+            if (multi)
+                g.drawText (it.name, row, Justification::centredLeft, true);
+            g.setFont (uiFont (11.0f, true));
+            g.drawText (String (it.db, 1) + " dB", row, multi ? Justification::centredRight : Justification::centredLeft);
+        }
+    }
 }
 
 //==============================================================================
@@ -761,6 +941,9 @@ ScopeLabAudioProcessorEditor::ScopeLabAudioProcessorEditor (ScopeLabAudioProcess
     addChildComponent (gonio);
     addChildComponent (phase);
     addAndMakeVisible (spectrum);
+
+    wave.onExpandToggle     = [this] { setFocusPanel (focusPanel == 1 ? 0 : 1); };
+    spectrum.onExpandToggle = [this] { setFocusPanel (focusPanel == 2 ? 0 : 2); };
 
     trackBar.onToggle = [this] (int key)
     {
@@ -784,7 +967,7 @@ ScopeLabAudioProcessorEditor::ScopeLabAudioProcessorEditor (ScopeLabAudioProcess
 
     viewBox.addItemList ({ "Esta pista (L/R)", "Multipista" }, 1);
     syncBox.addItemList ({ "Libre", "Trigger", "Tempo del DAW" }, 1);
-    beatsBox.addItemList ({ "1/4 tiempo", "1/2 tiempo", "1 tiempo", "2 tiempos", u8 ("1 compás") }, 1);
+    beatsBox.addItemList ({ "1/4 tiempo", "1/2 tiempo", "1 tiempo", "2 tiempos", u8 ("1 compás"), "2 compases", "4 compases" }, 1);
     for (auto* box : { &viewBox, &syncBox, &beatsBox })
         addAndMakeVisible (*box);
 
@@ -831,14 +1014,27 @@ void ScopeLabAudioProcessorEditor::resized()
     controlsArea = b.removeFromBottom (52);
     b.removeFromBottom (8);
 
-    auto top = b.removeFromTop (roundToInt ((float) b.getHeight() * 0.58f));
-    b.removeFromTop (8);
-    auto side = top.removeFromRight (jmax (top.getHeight(), 260));
-    gonio.setBounds (side);
-    phase.setBounds (side);
-    top.removeFromRight (8);
-    wave.setBounds (top);
-    spectrum.setBounds (b);
+    wave.setVisible (focusPanel != 2);
+    spectrum.setVisible (focusPanel != 1);
+    if (focusPanel == 1)
+    {
+        wave.setBounds (b);
+    }
+    else if (focusPanel == 2)
+    {
+        spectrum.setBounds (b);
+    }
+    else
+    {
+        auto top = b.removeFromTop (roundToInt ((float) b.getHeight() * 0.58f));
+        b.removeFromTop (8);
+        auto side = top.removeFromRight (jmax (top.getHeight(), 260));
+        gonio.setBounds (side);
+        phase.setBounds (side);
+        top.removeFromRight (8);
+        wave.setBounds (top);
+        spectrum.setBounds (b);
+    }
 
     auto c = controlsArea;
     auto column = [&c] (int w) { auto r = c.removeFromLeft (w); c.removeFromLeft (14); return r; };
@@ -858,6 +1054,15 @@ void ScopeLabAudioProcessorEditor::resized()
     freezeButton.setBounds (buttons.removeFromRight (96));
     buttons.removeFromRight (8);
     splitButton.setBounds (buttons.removeFromRight (100));
+}
+
+void ScopeLabAudioProcessorEditor::setFocusPanel (int panel)
+{
+    focusPanel = jlimit (0, 2, panel);
+    wave.setExpanded (focusPanel == 1);
+    spectrum.setExpanded (focusPanel == 2);
+    resized();
+    refresh();
 }
 
 void ScopeLabAudioProcessorEditor::drawMeter (Graphics& g, Rectangle<float> r, float level, Colour colour, const String& name)
@@ -1060,7 +1265,7 @@ void ScopeLabAudioProcessorEditor::refresh()
 
     // ---------- Ventana del osciloscopio ----------
     const double sr = me.sampleRate;
-    const int maxWindow = ScopeRingBuffer::capacity / 4 - 1;
+    const int maxWindow = ScopeRingBuffer::capacity / 2 - 1;
     int W = jlimit (16, maxWindow, roundToInt (timeParam->load() * sr / 1000.0));
     String status, divLabel;
     int divisions = 10;
@@ -1071,8 +1276,8 @@ void ScopeLabAudioProcessorEditor::refresh()
     {
         if (allPlaying)
         {
-            static constexpr double beatChoices[] = { 0.25, 0.5, 1.0, 2.0, 4.0 };
-            const double bw = beatChoices[jlimit (0, 4, roundToInt (beatsParam->load()))];
+            static constexpr double beatChoices[] = { 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0 };
+            const double bw = beatChoices[jlimit (0, 6, roundToInt (beatsParam->load()))];
             W = jlimit (16, maxWindow, (int) std::llround (sr * 60.0 / me.transport.bpm * bw));
             const double wsPpq = std::floor (commonPpq / bw) * bw;
 
@@ -1098,8 +1303,16 @@ void ScopeLabAudioProcessorEditor::refresh()
                     sweep = jlimit (0.0f, 1.0f, (float) (t->alignedEnd - wsSample) / (float) W);
             }
 
-            divisions = jmax (4, roundToInt (bw * 4.0));
-            divLabel = u8 ("1/16 por div  ·  ") + String (me.transport.bpm, 1) + " BPM";
+            if (bw >= 8.0)
+            {
+                divisions = roundToInt (bw);   // una división por tiempo, línea fuerte en cada compás
+                divLabel = u8 ("1 tiempo por div  ·  ") + String (me.transport.bpm, 1) + " BPM";
+            }
+            else
+            {
+                divisions = jmax (4, roundToInt (bw * 4.0));
+                divLabel = u8 ("1/16 por div  ·  ") + String (me.transport.bpm, 1) + " BPM";
+            }
             done = true;
         }
         else
@@ -1214,11 +1427,11 @@ void ScopeLabAudioProcessorEditor::refresh()
             lanes.push_back (lane);
         }
     }
-    wave.setData (std::move (series), std::move (lanes), gain, divisions, divLabel, sweep, status);
+    wave.setData (std::move (series), std::move (lanes), gain, divisions, divLabel, sweep, status, ! multi);
 
     // ---------- Panel derecho: estéreo (una pista) o fase entre pistas ----------
-    gonio.setVisible (! multi);
-    phase.setVisible (multi);
+    gonio.setVisible (! multi && focusPanel == 0);
+    phase.setVisible (multi && focusPanel == 0);
     if (multi)
     {
         updatePhase (used, me, allPlaying);
@@ -1240,7 +1453,15 @@ void ScopeLabAudioProcessorEditor::refresh()
         t->slot->buffer->read (multi ? t->alignedEnd : t->end, N, specL.data(), specR.data());
         for (int i = 0; i < N; ++i)
             specMono[(size_t) i] = (specL[(size_t) i] + specR[(size_t) i]) * 0.5f;
-        spectrum.pushTrack (t->key, specMono.data(), multi ? t->colour : ScopeColours::left);
+        spectrum.pushTrack (t->key, specMono.data(), multi ? t->colour : ScopeColours::left, t->name);
     }
     spectrum.endFrame();
+
+    // Con ventanas muy largas (varios compases) bajamos a 30 cuadros por segundo para no cargar la Mac
+    const int hz = W > 150000 ? 30 : 60;
+    if (hz != currentHz)
+    {
+        currentHz = hz;
+        startTimerHz (hz);
+    }
 }

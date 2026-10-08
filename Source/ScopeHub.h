@@ -13,7 +13,7 @@
 class ScopeRingBuffer
 {
 public:
-    static constexpr int capacity = 1 << 18;   // 262144 muestras (~5.4 s a 48 kHz)
+    static constexpr int capacity = 1 << 21;   // 2097152 muestras (~43 s a 48 kHz)
     static constexpr int mask     = capacity - 1;
 
     ScopeRingBuffer() : left ((size_t) capacity, 0.0f), right ((size_t) capacity, 0.0f) {}

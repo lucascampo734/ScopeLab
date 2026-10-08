@@ -145,7 +145,7 @@ int main (int argc, char* argv[])
         p->setValueNotifyingHost (p->convertTo0to1 (plainValue));
     };
 
-    feed ((int) sr * 2);
+    feed ((int) sr * 10);
     std::unique_ptr<juce::AudioProcessorEditor> ed (main.createEditorIfNeeded());
     auto* editor = dynamic_cast<ScopeLabAudioProcessorEditor*> (ed.get());
     editor->setSize (1040, 660);
@@ -173,37 +173,46 @@ int main (int argc, char* argv[])
         editor->refresh();
     };
 
-    // 1) Multipista, tempo, 1 tiempo, superpuestas
-    setParam ("view", 1); setParam ("sync", 2); setParam ("beats", 2); setParam ("split", 0.0f);
-    settle (60);
-    feedToBeatFraction (1.0, 0.97);
-    save ("04_multi_superpuestas.png");
-
-    // 2) Multipista, 1 compás, separadas
-    setParam ("beats", 4); setParam ("split", 1.0f);
-    settle (40);
-    feedToBeatFraction (4.0, 0.7);
-    save ("05_multi_separadas.png");
-
-    // 3) Vista de una sola pista (L/R), como antes
-    setParam ("view", 0); setParam ("split", 0.0f); setParam ("beats", 2);
-    settle (30);
-    feedToBeatFraction (1.0, 0.6);
-    save ("01_esta_pista.png");
-
-    // 4) Animación multipista
-    setParam ("view", 1); setParam ("beats", 2); setParam ("split", 0.0f);
-    settle (20);
-    auto framesDir = outDir.getChildFile ("frames");
-    framesDir.deleteRecursively();
-    framesDir.createDirectory();
-    for (int i = 0; i < 120; ++i)
+    auto hoverAtHz = [&] (float hz)
     {
-        feed ((int) sr / 30);
-        editor->refresh();
-        writePng (editor->createComponentSnapshot (editor->getLocalBounds(), true, 0.7f),
-                  framesDir.getChildFile (juce::String::formatted ("f%03d.png", i)));
-    }
+        auto& sv = editor->getSpectrumView();
+        const float left = 10.0f + 30.0f, right = (float) sv.getWidth() - 10.0f;
+        const float t = std::log (hz / 20.0f) / std::log (1000.0f);
+        sv.setHover (juce::Point<float> (left + (right - left) * t, (float) sv.getHeight() * 0.5f));
+    };
+
+    // 1) Multipista, 4 compases, separadas, con lectura del mouse en 62 Hz
+    setParam ("view", 1); setParam ("sync", 2); setParam ("beats", 6); setParam ("split", 1.0f);
+    settle (60);
+    feedToBeatFraction (16.0, 0.8);
+    hoverAtHz (62.0f);
+    editor->refresh();
+    save ("06_cuatro_compases.png");
+
+    // 2) 1 compás superpuestas (tienen que verse 4 golpes)
+    setParam ("beats", 4); setParam ("split", 0.0f);
+    settle (30);
+    feedToBeatFraction (4.0, 0.95);
+    editor->getSpectrumView().setHover (std::nullopt);
+    editor->refresh();
+    save ("07_un_compas.png");
+
+    // 3) Espectro ampliado con lectura del mouse
+    editor->setFocusPanel (2);
+    settle (10);
+    hoverAtHz (110.0f);
+    editor->refresh();
+    save ("08_espectro_ampliado.png");
+
+    // 4) Osciloscopio ampliado, vista de una pista con zoom +6 dB
+    editor->getSpectrumView().setHover (std::nullopt);
+    editor->setFocusPanel (1);
+    setParam ("view", 0); setParam ("beats", 2); setParam ("gain", 6.0f);
+    settle (20);
+    feedToBeatFraction (1.0, 0.6);
+    save ("09_osciloscopio_ampliado.png");
+    editor->setFocusPanel (0);
+    setParam ("gain", 0.0f);
 
     ed.reset();
     tracks.clear();

@@ -3,6 +3,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
 #include <map>
+#include <optional>
 #include <set>
 #include "PluginProcessor.h"
 
@@ -45,11 +46,20 @@ struct ScopeSeries
 class WaveformView : public juce::Component
 {
 public:
+    static constexpr float dbAxisWidth = 30.0f;
+
     void setData (std::vector<ScopeSeries> newSeries, std::vector<std::vector<int>> newLanes, float gain,
-                  int divisions, const juce::String& divLabel, float sweep, const juce::String& status);
+                  int divisions, const juce::String& divLabel, float sweep, const juce::String& status, bool showLRLegend);
+    void setExpanded (bool e) { expanded = e; repaint(); }
     void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+
+    std::function<void()> onExpandToggle;
 
 private:
+    juce::Rectangle<float> expandIcon;
+    bool expanded = false, showLegend = true;
     void drawLane (juce::Graphics&, juce::Rectangle<float> lane, const std::vector<int>& indices);
     void drawSeries (juce::Graphics&, juce::Rectangle<float> lane, const ScopeSeries&);
 
@@ -126,17 +136,32 @@ public:
 
     SpectrumView();
     void beginFrame (double sampleRate);
-    void pushTrack (int key, const float* mono, juce::Colour colour);   // fftSize muestras
+    void pushTrack (int key, const float* mono, juce::Colour colour, const juce::String& name);   // fftSize muestras
     void endFrame();
     void paint (juce::Graphics&) override;
+
+    void setExpanded (bool e) { expanded = e; repaint(); }
+    void setHover (std::optional<juce::Point<float>> p) { hoverPos = p; repaint(); }
+    void mouseMove (const juce::MouseEvent& e) override  { setHover (e.position); }
+    void mouseDrag (const juce::MouseEvent& e) override  { setHover (e.position); }
+    void mouseExit (const juce::MouseEvent&) override    { setHover (std::nullopt); }
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+
+    std::function<void()> onExpandToggle;
 
 private:
     struct Curve
     {
         std::vector<float> smoothed, peaks;
         juce::Colour colour;
+        juce::String name;
         bool touched = false;
     };
+
+    std::optional<juce::Point<float>> hoverPos;
+    juce::Rectangle<float> expandIcon;
+    bool expanded = false;
 
     float valueAt (const std::vector<float>& bins, float f0, float f1) const;
 
@@ -161,6 +186,10 @@ public:
 
     // Lee el audio de todas las pistas y actualiza las vistas (lo llama el timer a 60 Hz).
     void refresh();
+
+    // 0 = normal, 1 = osciloscopio ampliado, 2 = espectro ampliado
+    void setFocusPanel (int panel);
+    SpectrumView& getSpectrumView() noexcept { return spectrum; }
 
 private:
     struct Track
@@ -213,6 +242,7 @@ private:
     std::set<int> hiddenKeys;
     std::map<int, std::pair<float, float>> corrSmooth;
     std::vector<float> tmpL, tmpR, tmpMono, gL, gR, specL, specR, specMono, refMono, refLow, otherMono, otherLow;
+    int focusPanel = 0, currentHz = 60;
     float holdL = 0.0f, holdR = 0.0f;
     int holdCounterL = 0, holdCounterR = 0;
     juce::Rectangle<int> headerArea, controlsArea;

@@ -1,40 +1,57 @@
+![ScopeLab](docs/04_multi_superpuestas.png)
+
 # ScopeLab
 
-![ScopeLab](docs/02_tempo_compas.png)
+Analizador visual en formato VST3 y AU: osciloscopio, goniómetro estéreo y analizador de espectro, con **modo multipista** para comparar varias pistas y ver si se pisan. El audio pasa sin modificarse.
 
-Analizador visual en formato VST3 (y AU en Mac): osciloscopio, goniómetro estéreo con medidor de correlación y analizador de espectro. El audio pasa sin modificarse.
+## Modo multipista
 
-## Funciones
+Poné ScopeLab en cada pista que quieras comparar (por ejemplo Kick y Bass), abrí cualquiera de ellas y elegí **Vista → Multipista**. Todas las instancias se ven entre sí.
+
+- **Ondas alineadas al tempo**, cada pista con su color, más la **suma** en blanco. Ahí se ve si los golpes coinciden o si una pista le "come" la onda a la otra.
+- **Espectro comparado**: en rojo, las frecuencias donde dos pistas tienen mucha energía a la vez (enmascaramiento).
+- **Fase entre pistas**: correlación de cada pista contra la tuya, en graves (<150 Hz) y en todo el rango. Si da negativa, al sumarse se cancelan.
+- Clic en una pista de la barra de arriba para mostrarla u ocultarla.
+- **Separados** pone cada pista en su propio carril.
+
+Para que se alineen, el DAW tiene que estar en Play. En Ableton los nombres y colores de las pistas aparecen solos (VST3).
+
+> Importante: usá **el mismo formato en todas las pistas** (todas VST3 o todas AU). Una instancia VST3 no ve a una AU.
+
+## Otras funciones
 
 - **Osciloscopio** con tres modos de sincronía:
   - *Libre*: muestra la ventana de tiempo elegida.
   - *Trigger*: se engancha al cruce por cero de los graves para que la onda quede quieta.
-  - *Tempo del DAW*: la ventana dura 1/4 de tiempo hasta 1 compás y se dibuja con barrido, como un osciloscopio real.
-- Vista de **L y R superpuestos** o **separados**.
-- **Goniómetro** (Mid/Side) y medidor de **correlación** de -1 a +1.
-- **Espectro** FFT 4096 en escala logarítmica, con pendiente de 4.5 dB/oct y línea de picos.
-- Medidores de pico L/R, **zoom vertical** y botón **Congelar**.
-- La ventana es redimensionable y los ajustes se guardan con el proyecto.
+  - *Tempo del DAW*: la ventana dura entre 1/4 de tiempo y 1 compás, y se dibuja con barrido como un osciloscopio real.
+- Vista **Esta pista (L/R)** con goniómetro (Mid/Side) y medidor de correlación L/R.
+- **Espectro** FFT 4096 logarítmico, con pendiente de 4.5 dB/oct.
+- Medidores de pico, **zoom vertical** y botón **Congelar**.
 
-## Conseguir el plugin compilado (sin instalar nada)
+## Conseguir el plugin compilado
 
-1. Creá un repositorio en GitHub y subí esta carpeta (sin `build/` ni `JUCE/`; JUCE se descarga solo).
-2. Entrá a la pestaña **Actions**. La compilación arranca sola (tarda unos 10–15 minutos).
-3. Cuando termine, abrí la ejecución y descargá **ScopeLab-Windows** o **ScopeLab-Mac** en *Artifacts*.
+Cada vez que se sube un cambio al repositorio, GitHub lo compila solo:
 
-## Instalar
+1. Abrí la pestaña **Actions** y entrá a la última ejecución con tilde verde.
+2. Descargá **ScopeLab-Mac** o **ScopeLab-Windows** en la sección *Artifacts*.
 
-**Windows:** copiá `ScopeLab.vst3` a `C:\Program Files\Common Files\VST3\` y volvé a escanear plugins en tu DAW.
+## Instalar en Mac
 
-**Mac:** copiá `ScopeLab.vst3` a `~/Library/Audio/Plug-Ins/VST3/` y `ScopeLab.component` a `~/Library/Audio/Plug-Ins/Components/`. Como no está firmado con certificado de Apple, la primera vez corré en la Terminal:
+1. En el Finder apretá **Cmd + Shift + G**, pegá `~/Library/Audio/Plug-Ins/VST3` y copiá ahí `ScopeLab.vst3`.
+2. Repetí con `~/Library/Audio/Plug-Ins/Components` para copiar `ScopeLab.component`.
+3. Como el plugin no está firmado por Apple, abrí la Terminal y pegá:
+   ```
+   xattr -cr ~/Library/Audio/Plug-Ins/VST3/ScopeLab.vst3 ~/Library/Audio/Plug-Ins/Components/ScopeLab.component
+   ```
+4. En Ableton, andá a *Preferencias → Plug-ins*, activá VST3 o Audio Units y tocá **Volver a escanear**.
 
-```
-xattr -cr ~/Library/Audio/Plug-Ins/VST3/ScopeLab.vst3 ~/Library/Audio/Plug-Ins/Components/ScopeLab.component
-```
+## Instalar en Windows
+
+Copiá `ScopeLab.vst3` a `C:\Program Files\Common Files\VST3\` y volvé a escanear los plugins.
 
 ## Compilar en tu compu
 
-Necesitás CMake 3.22+ y Visual Studio 2022 (Windows) o Xcode (Mac).
+Necesitás CMake 3.22 o posterior, más Xcode (Mac) o Visual Studio 2022 (Windows).
 
 ```
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -45,6 +62,7 @@ El resultado queda en `build/ScopeLab_artefacts/Release/`.
 
 ## Archivos
 
-- `Source/PluginProcessor.*`: captura el audio en un buffer circular sin bloqueos y lee el tempo del DAW.
-- `Source/PluginEditor.*`: interfaz y dibujo de las tres vistas (60 cuadros por segundo).
-- `Tools/SnapshotMain.cpp`: herramienta opcional que genera capturas con una mezcla de prueba (`-DSCOPELAB_BUILD_SNAPSHOT=ON`).
+- `Source/ScopeHub.h`: espacio compartido entre instancias, con un lugar por pista (audio, tempo, nombre y color).
+- `Source/PluginProcessor.*`: copia el audio sin bloqueos y lee el tempo del DAW.
+- `Source/PluginEditor.*`: interfaz, alineación entre pistas y dibujo de las vistas a 60 cuadros por segundo.
+- `Tools/SnapshotMain.cpp`: herramienta opcional que simula tres pistas y genera capturas (`-DSCOPELAB_BUILD_SNAPSHOT=ON`).

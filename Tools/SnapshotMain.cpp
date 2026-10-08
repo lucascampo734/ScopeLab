@@ -1,5 +1,5 @@
-// Alimenta el plugin con una mezcla de prueba (bombo, bajo, acorde estéreo, hi-hats)
-// y guarda capturas PNG de la interfaz. Uso: ScopeSnapshot <carpeta_salida>
+// Simula tres pistas de Ableton (bombo, bajo, pad), cada una con su propia instancia
+// de ScopeLab, y guarda capturas PNG de la interfaz. Uso: ScopeSnapshot <carpeta_salida>
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 #include <cmath>
@@ -18,9 +18,12 @@ struct FakePlayHead : juce::AudioPlayHead
     }
 };
 
-struct DemoMix
+enum class Part { kick, bass, pad, full };
+
+struct DemoSignal
 {
     double sr = 48000.0, bpm = 124.0;
+    Part part = Part::full;
     juce::Random rng { 42 };
     float hatPrev = 0.0f;
 
@@ -31,43 +34,71 @@ struct DemoMix
         {
             const double t = (double) (startSample + i) / sr;
             const double beat = t * bpm / 60.0;
-            const double tk = (beat - std::floor (beat)) * 60.0 / bpm;            // seg desde el tiempo
+            const double tk = (beat - std::floor (beat)) * 60.0 / bpm;
             const double hb = beat + 0.5;
-            const double th = (hb - std::floor (hb)) * 60.0 / bpm;                // seg desde el contratiempo
+            const double th = (hb - std::floor (hb)) * 60.0 / bpm;
 
-            // Bombo: barrido 135 -> 45 Hz
-            const double kPhase = twoPi * (45.0 * tk + 90.0 / 28.0 * (1.0 - std::exp (-28.0 * tk)));
-            const double kick = 0.85 * std::sin (kPhase) * std::exp (-tk * 6.5);
+            double l = 0.0, r = 0.0;
 
-            // Bajo diente de sierra suave (A1 = 55 Hz) con sidechain
-            double bass = 0.0;
-            for (int h = 1; h <= 10; ++h)
-                bass += std::sin (twoPi * 55.0 * h * t) / h;
-            bass *= 0.16 * (1.0 - 0.85 * std::exp (-tk * 9.0));
+            if (part == Part::kick || part == Part::full)
+            {
+                const double kPhase = twoPi * (48.0 * tk + 90.0 / 28.0 * (1.0 - std::exp (-28.0 * tk)));
+                const double kick = 0.8 * std::sin (kPhase) * std::exp (-tk * 6.0);
+                l += kick; r += kick;
+            }
 
-            // Acorde (A, C, E) con armónicos, desafinado entre L y R para dar ancho estéreo
-            double padL = 0.0, padR = 0.0;
-            for (double f : { 220.0, 261.63, 329.63, 440.0 })
-                for (int h = 1; h <= 14; ++h)
-                {
-                    const double hf = f * h;
-                    if (hf > 16000.0) break;
-                    const double amp = 1.0 / (h * (1.0 + hf / 2500.0));
-                    padL += amp * std::sin (twoPi * hf * t + h);
-                    padR += amp * std::sin (twoPi * hf * 1.006 * t + 0.7 * h);
-                }
-            const double padAmp = 0.06 * (0.6 + 0.4 * std::sin (twoPi * 0.25 * t));
-            padL *= padAmp; padR *= padAmp;
+            if (part == Part::bass || part == Part::full)
+            {
+                // Bajo en La (55 Hz) que entra apenas sale el bombo y le pisa la cola
+                double bass = 0.0;
+                for (int h = 1; h <= 10; ++h)
+                    bass += std::sin (twoPi * 55.0 * h * t + h * 0.3) / (h * (1.0 + h * 0.15));
+                bass *= 0.32 * (1.0 - 0.55 * std::exp (-tk * 7.0));
+                l += bass; r += bass;
+            }
 
-            // Hi-hat: ruido pasa-altos en el contratiempo
-            const float noise = rng.nextFloat() * 2.0f - 1.0f;
-            const float hp = noise - hatPrev; hatPrev = noise;
-            const double hat = 0.22 * hp * std::exp (-th * 55.0);
+            if (part == Part::pad || part == Part::full)
+            {
+                double padL = 0.0, padR = 0.0;
+                for (double f : { 220.0, 261.63, 329.63, 440.0 })
+                    for (int h = 1; h <= 14; ++h)
+                    {
+                        const double hf = f * h;
+                        if (hf > 16000.0) break;
+                        const double amp = 1.0 / (h * (1.0 + hf / 2500.0));
+                        padL += amp * std::sin (twoPi * hf * t + h);
+                        padR += amp * std::sin (twoPi * hf * 1.006 * t + 0.7 * h);
+                    }
+                const double padAmp = 0.09 * (0.6 + 0.4 * std::sin (twoPi * 0.25 * t));
+                const float noise = rng.nextFloat() * 2.0f - 1.0f;
+                const float hp = noise - hatPrev; hatPrev = noise;
+                const double hat = 0.22 * hp * std::exp (-th * 55.0);
+                l += padL * padAmp + hat * 0.7;
+                r += padR * padAmp + hat;
+            }
 
-            L[i] = (float) (kick + bass + padL + hat * 0.7);
-            R[i] = (float) (kick + bass + padR + hat * 1.0);
+            L[i] = (float) l;
+            R[i] = (float) r;
         }
     }
+};
+
+struct SimTrack
+{
+    SimTrack (Part p, const juce::String& name, juce::Colour colour, double sr, int block)
+    {
+        signal.part = p;
+        signal.sr = sr;
+        proc.setPlayConfigDetails (2, 2, sr, block);
+        proc.prepareToPlay (sr, block);
+        proc.setPlayHead (&playHead);
+        proc.updateTrackProperties ({ name, colour });
+    }
+    ~SimTrack() { proc.setPlayHead (nullptr); }
+
+    ScopeLabAudioProcessor proc;
+    FakePlayHead playHead;
+    DemoSignal signal;
 };
 
 int main (int argc, char* argv[])
@@ -80,15 +111,12 @@ int main (int argc, char* argv[])
     constexpr double sr = 48000.0;
     constexpr int block = 400;
 
-    ScopeLabAudioProcessor proc;
-    proc.setPlayConfigDetails (2, 2, sr, block);
-    proc.prepareToPlay (sr, block);
+    // Colores parecidos a los de Ableton
+    std::vector<std::unique_ptr<SimTrack>> tracks;
+    tracks.push_back (std::make_unique<SimTrack> (Part::kick, "Kick", juce::Colour (0xffff6f3c), sr, block));
+    tracks.push_back (std::make_unique<SimTrack> (Part::bass, "Bass", juce::Colour (0xff3ec7ff), sr, block));
+    tracks.push_back (std::make_unique<SimTrack> (Part::pad,  "Pad",  juce::Colour (0xffc46cff), sr, block));
 
-    FakePlayHead playHead;
-    proc.setPlayHead (&playHead);
-
-    DemoMix mix;
-    mix.sr = sr; mix.bpm = playHead.bpm;
     int64_t pos = 0;
     juce::AudioBuffer<float> buffer (2, block);
     juce::MidiBuffer midi;
@@ -99,80 +127,86 @@ int main (int argc, char* argv[])
         {
             const int n = juce::jmin (block, samples);
             buffer.setSize (2, n, false, false, true);
-            mix.render (buffer.getWritePointer (0), buffer.getWritePointer (1), n, pos);
-            playHead.ppq = (double) pos / sr * playHead.bpm / 60.0;
-            proc.processBlock (buffer, midi);
+            for (auto& t : tracks)
+            {
+                t->signal.render (buffer.getWritePointer (0), buffer.getWritePointer (1), n, pos);
+                t->playHead.ppq = (double) pos / sr * t->playHead.bpm / 60.0;
+                t->proc.processBlock (buffer, midi);
+            }
             pos += n;
             samples -= n;
         }
     };
 
+    auto& main = tracks.front()->proc;   // abrimos la ventana del plugin del bombo
     auto setParam = [&] (const juce::String& id, float plainValue)
     {
-        auto* p = proc.apvts.getParameter (id);
+        auto* p = main.apvts.getParameter (id);
         p->setValueNotifyingHost (p->convertTo0to1 (plainValue));
     };
 
     feed ((int) sr * 2);
-    std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditorIfNeeded());
+    std::unique_ptr<juce::AudioProcessorEditor> ed (main.createEditorIfNeeded());
     auto* editor = dynamic_cast<ScopeLabAudioProcessorEditor*> (ed.get());
-    editor->setSize (980, 620);
+    editor->setSize (1040, 660);
 
-    auto save = [&] (const juce::String& name, float scale = 1.0f)
+    auto writePng = [] (const juce::Image& img, const juce::File& f)
     {
-        auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, scale);
-        auto f = outDir.getChildFile (name);
         f.deleteFile();
         juce::FileOutputStream os (f);
         juce::PNGImageFormat().writeImageToStream (img, os);
     };
-
+    auto save = [&] (const juce::String& name)
+    {
+        writePng (editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f), outDir.getChildFile (name));
+    };
     auto settle = [&] (int frames)
     {
         for (int i = 0; i < frames; ++i) { feed ((int) sr / 60); editor->refresh(); }
     };
-
-    // 1) Trigger, 30 ms
-    setParam ("sync", 1); setParam ("time", 30.0f); setParam ("gain", 0.0f);
-    settle (40);
-    save ("01_trigger.png");
-
-    // 2) Tempo del DAW, 1 compás (captura a mitad del compás para ver el barrido)
-    setParam ("sync", 2); setParam ("beats", 4);
-    settle (50);
+    auto feedToBeatFraction = [&] (double beats, double fraction)
     {
-        const double spb = sr * 60.0 / playHead.bpm;
-        const double barPos = std::fmod ((double) pos, spb * 4.0);
-        const int toMid = (int) std::fmod (spb * 2.6 - barPos + spb * 4.0, spb * 4.0);
-        feed (toMid);
+        const double spb = sr * 60.0 / 124.0;
+        const double win = spb * beats;
+        const double cur = std::fmod ((double) pos, win);
+        feed ((int) std::fmod (win * fraction - cur + win, win));
         editor->refresh();
-    }
-    save ("02_tempo_compas.png");
+    };
 
-    // 3) Tempo, 1 tiempo, L/R separados
-    setParam ("beats", 2); setParam ("split", 1.0f);
+    // 1) Multipista, tempo, 1 tiempo, superpuestas
+    setParam ("view", 1); setParam ("sync", 2); setParam ("beats", 2); setParam ("split", 0.0f);
+    settle (60);
+    feedToBeatFraction (1.0, 0.97);
+    save ("04_multi_superpuestas.png");
+
+    // 2) Multipista, 1 compás, separadas
+    setParam ("beats", 4); setParam ("split", 1.0f);
+    settle (40);
+    feedToBeatFraction (4.0, 0.7);
+    save ("05_multi_separadas.png");
+
+    // 3) Vista de una sola pista (L/R), como antes
+    setParam ("view", 0); setParam ("split", 0.0f); setParam ("beats", 2);
     settle (30);
-    save ("03_tempo_separados.png");
-    setParam ("split", 0.0f);
+    feedToBeatFraction (1.0, 0.6);
+    save ("01_esta_pista.png");
 
-    // 4) Frames para animación (tempo, 1 compás, 30 fps)
-    setParam ("beats", 4);
-    settle (10);
+    // 4) Animación multipista
+    setParam ("view", 1); setParam ("beats", 2); setParam ("split", 0.0f);
+    settle (20);
     auto framesDir = outDir.getChildFile ("frames");
+    framesDir.deleteRecursively();
     framesDir.createDirectory();
     for (int i = 0; i < 120; ++i)
     {
         feed ((int) sr / 30);
         editor->refresh();
-        auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 0.7f);
-        auto f = framesDir.getChildFile (juce::String::formatted ("f%03d.png", i));
-        f.deleteFile();
-        juce::FileOutputStream os (f);
-        juce::PNGImageFormat().writeImageToStream (img, os);
+        writePng (editor->createComponentSnapshot (editor->getLocalBounds(), true, 0.7f),
+                  framesDir.getChildFile (juce::String::formatted ("f%03d.png", i)));
     }
 
     ed.reset();
-    proc.setPlayHead (nullptr);
+    tracks.clear();
     std::puts ("ok");
     return 0;
 }

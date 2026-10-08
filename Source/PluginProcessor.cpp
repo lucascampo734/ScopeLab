@@ -7,6 +7,19 @@ ScopeLabAudioProcessor::ScopeLabAudioProcessor()
                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "ScopeLabState", createParameterLayout())
 {
+    slotIndex = hub->acquire();
+    if (slotIndex < 0)
+    {
+        privateSlot = std::make_unique<ScopeSlot>();
+        privateSlot->buffer = std::make_unique<ScopeRingBuffer>();
+        privateSlot->setInfo ("Esta pista", ScopeHub::defaultColour (0));
+        privateSlot->inUse.store (true);
+    }
+}
+
+ScopeLabAudioProcessor::~ScopeLabAudioProcessor()
+{
+    hub->release (slotIndex);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ScopeLabAudioProcessor::createParameterLayout()
@@ -30,12 +43,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout ScopeLabAudioProcessor::crea
             .withStringFromValueFunction ([] (float v, int) { return (v > 0 ? "+" : "") + String (v, 1) + " dB"; })));
 
     layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { "sync", 1 }, String::fromUTF8 ("Sincronía"), StringArray { "Libre", "Trigger", "Tempo" }, 1));
+        ParameterID { "sync", 1 }, String::fromUTF8 ("Sincronía"), StringArray { "Libre", "Trigger", "Tempo" }, 2));
 
     layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { "beats", 1 }, "Tiempos", StringArray { "1/4 tiempo", "1/2 tiempo", "1 tiempo", "2 tiempos", String::fromUTF8 ("1 compás") }, 2));
+        ParameterID { "beats", 1 }, "Tiempos",
+        StringArray { "1/4 tiempo", "1/2 tiempo", "1 tiempo", "2 tiempos", String::fromUTF8 ("1 compás") }, 2));
 
-    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "split", 1 }, "L/R separados", false));
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { "view", 1 }, "Vista", StringArray { "Esta pista (L/R)", "Multipista" }, 1));
+
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "split", 1 }, "Separados", false));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "freeze", 1 }, "Congelar", false));
 
     return layout;
@@ -43,7 +60,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ScopeLabAudioProcessor::crea
 
 void ScopeLabAudioProcessor::prepareToPlay (double sampleRate, int)
 {
-    currentSampleRate.store (sampleRate);
+    getSlot().sampleRate.store (sampleRate);
 }
 
 bool ScopeLabAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -54,32 +71,9 @@ bool ScopeLabAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
     return out == layouts.getMainInputChannelSet();
 }
 
-void ScopeLabAudioProcessor::publishTransport (double bpm, double ppq, int64_t sample, bool playing) noexcept
+void ScopeLabAudioProcessor::updateTrackProperties (const TrackProperties& properties)
 {
-    transportSeq.fetch_add (1, std::memory_order_acq_rel);   // impar = escribiendo
-    tBpm.store (bpm, std::memory_order_relaxed);
-    tPpq.store (ppq, std::memory_order_relaxed);
-    tSample.store (sample, std::memory_order_relaxed);
-    tPlaying.store (playing, std::memory_order_relaxed);
-    transportSeq.fetch_add (1, std::memory_order_acq_rel);   // par = listo
-}
-
-ScopeLabAudioProcessor::Transport ScopeLabAudioProcessor::getTransport() const noexcept
-{
-    Transport t;
-    for (int attempt = 0; attempt < 8; ++attempt)
-    {
-        const auto s1 = transportSeq.load (std::memory_order_acquire);
-        if (s1 & 1u) continue;
-        t.bpm     = tBpm.load (std::memory_order_relaxed);
-        t.ppq     = tPpq.load (std::memory_order_relaxed);
-        t.sample  = tSample.load (std::memory_order_relaxed);
-        t.playing = tPlaying.load (std::memory_order_relaxed);
-        std::atomic_thread_fence (std::memory_order_acquire);
-        if (transportSeq.load (std::memory_order_relaxed) == s1)
-            break;
-    }
-    return t;
+    getSlot().setHostInfo (properties.name, properties.colour);
 }
 
 void ScopeLabAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -96,7 +90,9 @@ void ScopeLabAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         return;
 
     // El audio pasa sin modificar: solo lo copiamos para dibujarlo.
-    const auto blockStart = scope.getWritePosition();
+    auto& slot = getSlot();
+    auto& ring = *slot.buffer;
+    const auto blockStart = ring.getWritePosition();
 
     bool gotTransport = false;
     if (auto* ph = getPlayHead())
@@ -105,17 +101,18 @@ void ScopeLabAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         {
             if (auto ppq = pos->getPpqPosition())
             {
-                publishTransport (pos->getBpm().orFallback (0.0), *ppq, blockStart, pos->getIsPlaying());
+                slot.publishTransport (pos->getBpm().orFallback (0.0), *ppq, blockStart, pos->getIsPlaying());
                 gotTransport = true;
             }
         }
     }
     if (! gotTransport)
-        publishTransport (0.0, 0.0, blockStart, false);
+        slot.publishTransport (0.0, 0.0, blockStart, false);
 
     const float* l = buffer.getReadPointer (0);
     const float* r = numIn > 1 ? buffer.getReadPointer (1) : l;
-    scope.push (l, r, n);
+    ring.push (l, r, n);
+    slot.lastBlockMs.store (juce::jmax ((juce::uint32) 1, juce::Time::getMillisecondCounter()), std::memory_order_relaxed);
 
     const float pl = buffer.getMagnitude (0, 0, n);
     const float pr = numIn > 1 ? buffer.getMagnitude (1, 0, n) : pl;

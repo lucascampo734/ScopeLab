@@ -1,0 +1,50 @@
+name: Compilar ScopeLab
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: ScopeLab-Windows
+          - os: macos-latest
+            name: ScopeLab-Mac
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compilar
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Firmar (ad-hoc) en Mac
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --deep -s - build/ScopeLab_artefacts/Release/VST3/ScopeLab.vst3
+          codesign --force --deep -s - build/ScopeLab_artefacts/Release/AU/ScopeLab.component
+          codesign --force --deep -s - build/ScopeLab_artefacts/Release/Standalone/ScopeLab.app
+
+      - name: Juntar archivos
+        shell: bash
+        run: |
+          mkdir -p out
+          cp -R build/ScopeLab_artefacts/Release/VST3/ScopeLab.vst3 out/
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            cp -R build/ScopeLab_artefacts/Release/AU/ScopeLab.component out/
+            cp -R build/ScopeLab_artefacts/Release/Standalone/ScopeLab.app out/
+          else
+            cp build/ScopeLab_artefacts/Release/Standalone/ScopeLab.exe out/
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: out

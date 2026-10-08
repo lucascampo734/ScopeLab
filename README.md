@@ -1,4 +1,4 @@
-![ScopeLab](docs/10_alineacion_suma.png)
+![ScopeLab](docs/14_golpes_kick.png)
 
 # ScopeLab
 
@@ -34,6 +34,8 @@ Para que se alineen, el DAW tiene que estar en Play. En Ableton los nombres y co
 - **Alineación entre pistas**: te dice cuántos ms llega tarde o temprano cada pista respecto a la tuya, qué valor poner en el *Track Delay* de Ableton y si conviene invertir la fase (Utility → Ø).
 - **Suma de las pistas** en el espectro, en blanco: muestra lo que realmente queda cuando se suman (si se cancelan, la curva baja).
 - **MID/SIDE**: separa el espectro de una pista en centro y costados.
+- **Modos del espectro** (botón a la izquierda de GUARDAR REF): *INSTANTE* (lo último que sonó), *PROMEDIO* (promedio sobre la duración elegida, ideal para comparar) y *GOLPES* (solo lo que suena justo cuando pega la pista de referencia, por ejemplo el kick).
+- **Referencia del panel de fase**: clic en una pista del panel para compararlas todas contra ella (también define la pista que dispara el modo GOLPES). Mide sobre la duración elegida y muestra qué porcentaje del tiempo suenan juntas.
 - **GUARDAR REF**: congela la curva actual como referencia punteada, para comparar.
 - **CASCADA**: espectrograma que muestra cómo cambia el espectro en el tiempo.
 - Medidores de pico, **zoom vertical** y botón **Congelar**.
@@ -43,7 +45,7 @@ Para que se alineen, el DAW tiene que estar en Play. En Ableton los nombres y co
 Cada vez que se sube un cambio al repositorio, GitHub lo compila solo:
 
 1. Abrí la pestaña **Actions** y entrá a la última ejecución con tilde verde.
-2. Descargá **ScopeLab-Mac** o **ScopeLab-Windows** en la sección *Artifacts*.
+2. Descargá **ScopeLab-Mac** en la sección *Artifacts*.
 
 ## Instalar en Mac
 

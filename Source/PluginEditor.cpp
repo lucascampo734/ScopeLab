@@ -487,11 +487,28 @@ void GoniometerView::paint (Graphics& g)
 }
 
 //==============================================================================
-void PhaseView::setRows (std::vector<Row> newRows, const String& rn, Colour rc, const String& msg)
+void PhaseView::setRows (std::vector<Row> newRows, const String& rn, Colour rc, const String& msg, bool isThis)
 {
     rows = std::move (newRows);
-    refName = rn; refColour = rc; message = msg;
+    refName = rn; refColour = rc; message = msg; refIsThis = isThis;
     repaint();
+}
+
+void PhaseView::mouseDown (const MouseEvent& e)
+{
+    if (! onSelectReference)
+        return;
+    if (refBounds.contains (e.position) && ! refIsThis)
+    {
+        onSelectReference (0);
+        return;
+    }
+    for (size_t i = 0; i < rowBounds.size() && i < rows.size(); ++i)
+        if (rowBounds[i].contains (e.position))
+        {
+            onSelectReference (rows[i].key);
+            return;
+        }
 }
 
 void PhaseView::paint (Graphics& g)
@@ -499,24 +516,36 @@ void PhaseView::paint (Graphics& g)
     auto b = getLocalBounds().toFloat();
     drawPanel (g, b);
     auto area = b.reduced (12.0f, 8.0f);
+    rowBounds.clear();
 
     g.setFont (uiFont (12.0f, true));
     g.setColour (ScopeColours::textBright);
     g.drawText ("FASE ENTRE PISTAS", area.removeFromTop (16.0f), Justification::centredLeft);
 
-    auto sub = area.removeFromTop (18.0f);
-    g.setFont (uiFont (11.0f));
-    g.setColour (ScopeColours::text);
-    g.drawText ("comparado con", sub.removeFromLeft (86.0f), Justification::centredLeft);
-    g.setColour (refColour);
-    g.setFont (uiFont (11.0f, true));
-    g.drawText (refName, sub, Justification::centredLeft);
+    // Referencia actual (clic = volver a esta pista)
+    refBounds = area.removeFromTop (18.0f);
+    {
+        auto sub = refBounds;
+        g.setFont (uiFont (11.0f));
+        g.setColour (ScopeColours::text);
+        g.drawText ("comparado con", sub.removeFromLeft (86.0f), Justification::centredLeft);
+        g.setColour (refColour);
+        g.setFont (uiFont (11.0f, true));
+        const String shown = refName + (refIsThis ? u8 ("  (esta)") : String());
+        g.drawText (shown, sub, Justification::centredLeft);
+        if (! refIsThis)
+        {
+            g.setFont (uiFont (10.0f));
+            g.setColour (ScopeColours::text);
+            g.drawText (u8 ("volver a esta ×"), sub, Justification::centredRight);
+        }
+    }
 
     auto footer = area.removeFromBottom (30.0f);
     g.setFont (uiFont (10.0f));
     g.setColour (ScopeColours::text);
-    g.drawFittedText (u8 ("+1 = suman · negativo = se cancelan\nTrack Delay: botón D del mezclador de Ableton"), footer.toNearestInt(),
-                      Justification::bottomLeft, 2);
+    g.drawFittedText (u8 ("clic en una pista = compararlas contra ella\nTrack Delay: botón D del mezclador de Ableton"),
+                      footer.toNearestInt(), Justification::bottomLeft, 2);
 
     area.removeFromTop (4.0f);
     if (rows.empty() || message.isNotEmpty())
@@ -530,10 +559,11 @@ void PhaseView::paint (Graphics& g)
         area.removeFromTop (40.0f);
     }
 
-    const float rowH = jmin (84.0f, area.getHeight() / (float) rows.size());
+    const float rowH = jmin (98.0f, area.getHeight() / (float) rows.size());
     for (auto& row : rows)
     {
         auto r = area.removeFromTop (rowH);
+        rowBounds.push_back (r);
         auto line1 = r.removeFromTop (16.0f);
         g.setColour (row.colour);
         g.fillEllipse (Rectangle<float> (8.0f, 8.0f).withCentre ({ line1.getX() + 4.0f, line1.getCentreY() }));
@@ -546,7 +576,7 @@ void PhaseView::paint (Graphics& g)
         if (! row.hasSignal)
         {
             g.setColour (ScopeColours::text);
-            g.drawText (u8 ("sin señal compartida"), line1, Justification::centredRight);
+            g.drawText (row.overlapPct <= 0.0f ? u8 ("no suenan juntas") : u8 ("midiendo…"), line1, Justification::centredRight);
             continue;
         }
 
@@ -563,9 +593,11 @@ void PhaseView::paint (Graphics& g)
         g.setColour (ScopeColours::gridStrong);
         g.drawVerticalLine (roundToInt (cx), bar.getY() - 2.0f, bar.getBottom() + 2.0f);
 
+        auto info = r.removeFromTop (13.0f);
         g.setColour (ScopeColours::text);
         g.setFont (uiFont (10.0f));
-        g.drawText ("todo el rango " + signedValue (row.fullCorr), r.removeFromTop (13.0f), Justification::centredRight);
+        g.drawText ("suenan juntas " + String (roundToInt (row.overlapPct)) + "% del tiempo", info, Justification::centredLeft);
+        g.drawText ("todo el rango " + signedValue (row.fullCorr), info, Justification::centredRight);
 
         // Alineación sugerida
         String text;
@@ -679,10 +711,14 @@ SpectrumView::SpectrumView()
     }
 }
 
-void SpectrumView::setOptions (bool msAvail, bool msEnabled, bool spectrogramEnabled)
+void SpectrumView::setOptions (bool msAvail, bool msEnabled, bool spectrogramEnabled,
+                               int newMode, const String& trigName, const String& newStatus)
 {
     msAvailable = msAvail;
     msOn = msEnabled;
+    mode = newMode;
+    triggerName = trigName;
+    status = newStatus;
     if (spectroOn != spectrogramEnabled)
         spectroImage = {};   // empezar la cascada limpia
     spectroOn = spectrogramEnabled;
@@ -697,7 +733,7 @@ void SpectrumView::beginFrame (double sr, bool showCollisions)
         c.touched = false;
 }
 
-void SpectrumView::pushTrack (int key, const float* mono, Colour colour, const String& name, bool isSum)
+SpectrumView::Curve& SpectrumView::curveFor (int key, Colour colour, const String& name, bool isSum)
 {
     auto& curve = curves[key];
     if (curve.smoothed.empty())
@@ -711,6 +747,25 @@ void SpectrumView::pushTrack (int key, const float* mono, Colour colour, const S
     curve.isSum = isSum;
     curve.touched = true;
     order.push_back (key);
+    return curve;
+}
+
+void SpectrumView::pushDb (int key, const std::vector<float>& db, Colour colour, const String& name, bool isSum)
+{
+    auto& curve = curveFor (key, colour, name, isSum);
+    const bool fresh = curve.smoothed.front() <= -119.9f && curve.smoothed[10] <= -119.9f;
+    for (size_t i = 0; i < curve.smoothed.size() && i < db.size(); ++i)
+    {
+        auto& s = curve.smoothed[i];
+        s = fresh ? db[i] : s + (db[i] - s) * 0.3f;
+        curve.peaks[i] = jmax (db[i], curve.peaks[i] - 0.35f);
+        curve.average[i] = s;   // ya es un promedio: la referencia guarda esto
+    }
+}
+
+void SpectrumView::pushTrack (int key, const float* mono, Colour colour, const String& name, bool isSum)
+{
+    auto& curve = curveFor (key, colour, name, isSum);
 
     std::fill (fftData.begin(), fftData.end(), 0.0f);
     std::copy (mono, mono + fftSize, fftData.begin());
@@ -816,7 +871,8 @@ void SpectrumView::toggleReference()
 
 bool SpectrumView::hitsHeaderControl (Point<float> p) const
 {
-    return expandIcon.expanded (4.0f).contains (p) || msChip.contains (p) || refChip.contains (p) || spectroChip.contains (p);
+    return expandIcon.expanded (4.0f).contains (p) || msChip.contains (p) || refChip.contains (p)
+        || spectroChip.contains (p) || modeChip.contains (p);
 }
 
 void SpectrumView::mouseDown (const MouseEvent& e)
@@ -824,6 +880,7 @@ void SpectrumView::mouseDown (const MouseEvent& e)
     const auto p = e.position;
     if (expandIcon.expanded (4.0f).contains (p)) { if (onExpandToggle) onExpandToggle(); return; }
     if (msChip.contains (p))                     { if (onToggleMs) onToggleMs(); return; }
+    if (modeChip.contains (p))                   { if (onCycleMode) onCycleMode(); return; }
     if (spectroChip.contains (p))                { if (onToggleSpectrogram) onToggleSpectrogram(); return; }
     if (refChip.contains (p))                    { toggleReference(); return; }
 }
@@ -918,6 +975,12 @@ void SpectrumView::paint (Graphics& g)
         g.drawText (text, r, Justification::centred);
     };
     const bool hasRef = reference != nullptr && ! reference->empty();
+    if (! spectroOn)
+    {
+        String modeText = mode == 1 ? "PROMEDIO" : mode == 2 ? "GOLPES: " + triggerName.toUpperCase().substring (0, 12) : "INSTANTE";
+        chip (modeChip, modeText, mode != 0);
+    }
+    else modeChip = {};
     if (msAvailable) chip (msChip, "MID/SIDE", msOn);
     else             msChip = {};
     if (! spectroOn) chip (refChip, hasRef ? "BORRAR REF" : "GUARDAR REF", hasRef);
@@ -937,8 +1000,13 @@ void SpectrumView::paint (Graphics& g)
     }
 
     g.setColour (ScopeColours::text);
-    g.drawText (u8 ("pendiente 4.5 dB/oct"), header, Justification::centredRight);
-    if (collisions)
+    g.drawText (u8 ("4.5 dB/oct"), header, Justification::centredRight);
+    if (status.isNotEmpty())
+    {
+        g.setColour (ScopeColours::caution);
+        g.drawText (status, header, Justification::centredLeft);
+    }
+    else if (collisions)
     {
         g.setColour (ScopeColours::warn);
         g.drawText ("rojo = se pisan", header, Justification::centredLeft);
@@ -1207,6 +1275,7 @@ ScopeLabAudioProcessorEditor::ScopeLabAudioProcessorEditor (ScopeLabAudioProcess
     freezeParam = proc.apvts.getRawParameterValue ("freeze");
     msParam     = proc.apvts.getRawParameterValue ("ms");
     spectroParam = proc.apvts.getRawParameterValue ("spectro");
+    specModeParam = proc.apvts.getRawParameterValue ("specmode");
 
     auto toggleParam = [this] (const String& id)
     {
@@ -1220,6 +1289,24 @@ ScopeLabAudioProcessorEditor::ScopeLabAudioProcessorEditor (ScopeLabAudioProcess
     };
     spectrum.onToggleMs          = [toggleParam] { toggleParam ("ms"); };
     spectrum.onToggleSpectrogram = [toggleParam] { toggleParam ("spectro"); };
+    spectrum.onCycleMode = [this]
+    {
+        if (auto* param = proc.apvts.getParameter ("specmode"))
+        {
+            const int next = (roundToInt (specModeParam->load()) + 1) % 3;
+            param->beginChangeGesture();
+            param->setValueNotifyingHost (param->convertTo0to1 ((float) next));
+            param->endChangeGesture();
+        }
+        refresh();
+    };
+    phase.onSelectReference = [this] (int key)
+    {
+        proc.phaseReferenceKey = key;
+        alignInfo.clear();
+        specCacheMode = -1;
+        refresh();
+    };
     spectrum.setReference (&proc.referenceSpectrum, &proc.referenceName);
 
     addAndMakeVisible (trackBar);
@@ -1485,107 +1572,169 @@ namespace
     }
 }
 
-void ScopeLabAudioProcessorEditor::updatePhase (std::vector<Track*>& tracks, Track& me, bool aligned)
+void ScopeLabAudioProcessorEditor::selectPhaseReferenceByName (const String& name)
 {
-    std::vector<PhaseView::Row> rows;
+    auto& hub = proc.getHub();
+    for (int i = 0; i < ScopeHub::maxSlots; ++i)
+    {
+        auto& slot = hub.slot (i);
+        if (slot.inUse.load() && slot.getName() == name)
+        {
+            proc.phaseReferenceKey = (i + 1) + 32 * (int) (slot.generation.load() % 1000000u);
+            alignInfo.clear();
+            specCacheMode = -1;
+            return;
+        }
+    }
+}
+
+void ScopeLabAudioProcessorEditor::updatePhase (std::vector<Track*>& tracks, Track& me, bool aligned, int windowSamples)
+{
     String message;
     if (! aligned)
         message = u8 ("Dale Play en Ableton para medir la fase entre pistas.");
 
-    constexpr int N = SpectrumView::fftSize;
-    const size_t skip = 256;   // descarta el arranque del filtro
+    // Referencia: la pista elegida (si sigue visible); si no, esta pista
+    Track* ref = &me;
+    for (auto* t : tracks)
+        if (proc.phaseReferenceKey != 0 && t->key == proc.phaseReferenceKey && t->visible)
+            ref = t;
+    const bool refIsThis = ref == &me;
 
-    if (aligned)
-    {
-        tmpL.resize (N); tmpR.resize (N); refMono.resize (N);
-        me.slot->buffer->read (me.alignedEnd, N, tmpL.data(), tmpR.data());
-        for (int i = 0; i < N; ++i) refMono[(size_t) i] = (tmpL[(size_t) i] + tmpR[(size_t) i]) * 0.5f;
-        lowpass (refMono, refLow, me.sampleRate, 150.0f);
-    }
+    // Ventana de análisis: la duración elegida, entre 0.5 y 4 segundos
+    static constexpr int block = 512, decim = 8;
+    const double sr = ref->sampleRate;
+    int L = jlimit ((int) (0.5 * sr), (int) (4.0 * sr), windowSamples);
+    L = jmax (block * 4, (L / block) * block);
+    const bool doAnalysis = aligned && (++frameCounter % 6 == 0);
 
-    // Alineación: ~340 ms de graves, decimados x8, buscando hasta ±20 ms (10 veces por segundo)
-    static constexpr int alignLen = 16384, decim = 8;   // static: Visual Studio no captura constexpr locales en lambdas
-    const bool doAlign = aligned && (++frameCounter % 6 == 0);
-    auto decimatedLows = [this] (Track& t, std::vector<float>& out)
+    auto readMono = [this, L] (Track& t, std::vector<float>& out)
     {
-        alignL.resize (alignLen); alignR.resize (alignLen); alignMono.resize (alignLen);
-        t.slot->buffer->read (t.alignedEnd, alignLen, alignL.data(), alignR.data());
-        for (int i = 0; i < alignLen; ++i)
-            alignMono[(size_t) i] = (alignL[(size_t) i] + alignR[(size_t) i]) * 0.5f;
-        lowpass (alignMono, alignLow, t.sampleRate, 150.0f);
-        out.resize (alignLen / decim);
-        for (int i = 0; i < alignLen / decim; ++i)
-            out[(size_t) i] = alignLow[(size_t) (i * decim)];
+        alignL.resize ((size_t) L); alignR.resize ((size_t) L); out.resize ((size_t) L);
+        t.slot->buffer->read (t.alignedEnd, L, alignL.data(), alignR.data());
+        for (int i = 0; i < L; ++i)
+            out[(size_t) i] = (alignL[(size_t) i] + alignR[(size_t) i]) * 0.5f;
     };
-    if (doAlign)
-        decimatedLows (me, alignRef);
-    const int maxLag = (int) std::ceil (0.02 * me.sampleRate / decim);
+    auto decimate = [] (const std::vector<float>& in, std::vector<float>& out)
+    {
+        out.resize (in.size() / decim);
+        for (size_t i = 0; i < out.size(); ++i) out[i] = in[i * decim];
+    };
+    auto blockEnergy = [] (const std::vector<float>& x, std::vector<float>& e, float& maxE)
+    {
+        e.resize (x.size() / block);
+        maxE = 0.0f;
+        for (size_t b = 0; b < e.size(); ++b)
+        {
+            double s = 0.0;
+            for (size_t i = b * block; i < (b + 1) * block; ++i) s += (double) x[i] * x[i];
+            e[b] = (float) (s / block);
+            maxE = jmax (maxE, e[b]);
+        }
+    };
 
+    std::vector<float> eRef, eOth;
+    float maxRef = 0.0f;
+    if (doAnalysis)
+    {
+        readMono (*ref, refFull);
+        lowpass (refFull, refLowL, ref->sampleRate, 150.0f);
+        decimate (refLowL, refDec);
+        blockEnergy (refFull, eRef, maxRef);
+    }
+    const int maxLag = (int) std::ceil (0.02 * sr / decim);
+
+    std::vector<PhaseView::Row> rows;
     std::set<int> seen;
     for (auto* t : tracks)
     {
-        if (t->isThis || ! t->visible) continue;
+        if (t == ref || ! t->visible) continue;
         PhaseView::Row row;
-        row.name = t->name;
+        row.key = t->key;
+        row.name = t->name + (t->isThis ? u8 ("  (esta)") : String());
         row.colour = t->colour;
+        seen.insert (t->key);
+        auto& info = alignInfo[t->key];
 
-        if (doAlign)
+        if (doAnalysis)
         {
-            decimatedLows (*t, alignOther);
-            float lag = 0.0f, ea = 0.0f, eb = 0.0f;
-            const float corr = findBestLag (alignRef, alignOther, maxLag, lag, ea, eb);
-            const float lagMs = lag * (float) decim / (float) me.sampleRate * 1000.0f;
-            const bool valid = ea > 1.0e-7f && eb > 1.0e-7f && std::abs (corr) > 0.5f;
+            readMono (*t, othFull);
+            lowpass (othFull, othLowL, t->sampleRate, 150.0f);
+            decimate (othLowL, othDec);
+            float maxOth = 0.0f;
+            blockEnergy (othFull, eOth, maxOth);
 
-            auto& ai = alignInfo[t->key];
+            // Solo cuentan los tramos donde suenan las dos (si no, los silencios diluyen la medida)
+            // "Suena" = a menos de 24 dB de su propio máximo en la ventana (las colas largas no cuentan)
+            const float thrRef = jmax (1.0e-8f, maxRef * 0.004f), thrOth = jmax (1.0e-8f, maxOth * 0.004f);
+            double sabF = 0, saaF = 0, sbbF = 0, sabL = 0, saaL = 0, sbbL = 0;
+            int both = 0, othActive = 0;
+            const size_t skipBlocks = 1;   // arranque del filtro
+            for (size_t bIdx = skipBlocks; bIdx < eRef.size() && bIdx < eOth.size(); ++bIdx)
+            {
+                const bool aOn = eRef[bIdx] > thrRef, bOn = eOth[bIdx] > thrOth;
+                if (bOn) ++othActive;
+                if (! (aOn && bOn)) continue;
+                ++both;
+                for (size_t i = bIdx * block; i < (bIdx + 1) * block; ++i)
+                {
+                    sabF += (double) refFull[i] * othFull[i];
+                    saaF += (double) refFull[i] * refFull[i];
+                    sbbF += (double) othFull[i] * othFull[i];
+                    sabL += (double) refLowL[i] * othLowL[i];
+                    saaL += (double) refLowL[i] * refLowL[i];
+                    sbbL += (double) othLowL[i] * othLowL[i];
+                }
+            }
+
+            const float overlap = othActive > 0 ? 100.0f * (float) both / (float) othActive : 0.0f;
+            const bool hasSignal = both > 0 && saaF > 1.0e-9 && sbbF > 1.0e-9;
+            const float full = hasSignal ? (float) (sabF / std::sqrt (saaF * sbbF)) : 0.0f;
+            const float low = (saaL > 1.0e-9 && sbbL > 1.0e-9) ? (float) (sabL / std::sqrt (saaL * sbbL)) : 0.0f;
+
+            const float k = info.measured ? 0.5f : 1.0f;
+            info.full += (full - info.full) * k;
+            info.low += (low - info.low) * k;
+            info.overlap += (overlap - info.overlap) * k;
+            info.hasSignal = hasSignal;
+            info.measured = true;
+
+            // Alineación en graves sobre toda la ventana
+            float lag = 0.0f, ea = 0.0f, eb = 0.0f;
+            const float corr = findBestLag (refDec, othDec, maxLag, lag, ea, eb);
+            const float lagMs = lag * (float) decim / (float) sr * 1000.0f;
+            const bool valid = hasSignal && ea > 1.0e-7f && eb > 1.0e-7f && std::abs (corr) > 0.5f;
             if (valid)
             {
-                if (ai.valid && std::abs (lagMs - ai.lagMs) < 1.0f) ai.lagMs += (lagMs - ai.lagMs) * 0.35f;
-                else                                                ai.lagMs = lagMs;
-                ai.corr = corr;
+                if (info.valid && std::abs (lagMs - info.lagMs) < 1.0f) info.lagMs += (lagMs - info.lagMs) * 0.35f;
+                else                                                    info.lagMs = lagMs;
+                info.corr = corr;
             }
-            ai.valid = valid;
-        }
-        if (aligned)
-        {
-            auto it = alignInfo.find (t->key);
-            if (it != alignInfo.end())
-            {
-                row.alignValid = it->second.valid;
-                row.lagMs = it->second.lagMs;
-                row.alignCorr = it->second.corr;
-            }
+            info.valid = valid;
         }
 
-        if (aligned)
+        if (aligned && info.measured)
         {
-            otherMono.resize (N);
-            t->slot->buffer->read (t->alignedEnd, N, tmpL.data(), tmpR.data());
-            for (int i = 0; i < N; ++i) otherMono[(size_t) i] = (tmpL[(size_t) i] + tmpR[(size_t) i]) * 0.5f;
-            lowpass (otherMono, otherLow, t->sampleRate, 150.0f);
-
-            float full = 0.0f, low = 0.0f;
-            const bool okFull = computeCorrelation (refMono, otherMono, skip, full);
-            const bool okLow  = computeCorrelation (refLow, otherLow, skip, low);
-            row.hasSignal = okFull;
-            if (! okLow) low = 0.0f;
-
-            auto& sm = corrSmooth[t->key];
-            sm.first  += (low - sm.first) * 0.15f;
-            sm.second += (full - sm.second) * 0.15f;
-            row.lowCorr = sm.first;
-            row.fullCorr = sm.second;
-            seen.insert (t->key);
+            row.hasSignal = info.hasSignal;
+            row.lowCorr = info.low;
+            row.fullCorr = info.full;
+            row.overlapPct = info.overlap;
+            row.alignValid = info.valid;
+            row.lagMs = info.lagMs;
+            row.alignCorr = info.corr;
+        }
+        else if (aligned)
+        {
+            row.hasSignal = false;
+            row.overlapPct = 1.0f;   // "midiendo…"
         }
         rows.push_back (row);
     }
 
-    for (auto it = corrSmooth.begin(); it != corrSmooth.end();)
-        it = seen.count (it->first) ? std::next (it) : corrSmooth.erase (it);
     for (auto it = alignInfo.begin(); it != alignInfo.end();)
         it = seen.count (it->first) ? std::next (it) : alignInfo.erase (it);
 
-    phase.setRows (std::move (rows), me.name + u8 ("  (esta)"), me.colour, message);
+    phase.setRows (std::move (rows), ref->name, ref->colour, message, refIsThis);
 }
 
 void ScopeLabAudioProcessorEditor::refresh()
@@ -1854,7 +2003,7 @@ void ScopeLabAudioProcessorEditor::refresh()
     phase.setVisible (multi && focusPanel == 0);
     if (multi)
     {
-        updatePhase (used, me, allPlaying);
+        updatePhase (used, me, allPlaying, W);
     }
     else
     {
@@ -1868,41 +2017,160 @@ void ScopeLabAudioProcessorEditor::refresh()
     constexpr int N = SpectrumView::fftSize;
     specL.resize (N); specR.resize (N); specMono.resize (N);
     const bool msOn = ! multi && msParam->load() > 0.5f;
-    spectrum.setOptions (! multi, msOn, spectroParam->load() > 0.5f);
-    spectrum.beginFrame (sr, multi);
+    const bool spectroOn = spectroParam->load() > 0.5f;
+    const int specMode = spectroOn ? 0 : jlimit (0, 2, roundToInt (specModeParam->load()));
 
+    // Pista que dispara el modo Golpes: la referencia elegida en el panel de fase
+    Track* trigger = &me;
+    for (auto& t : all)
+        if (proc.phaseReferenceKey != 0 && t.key == proc.phaseReferenceKey)
+            trigger = &t;
+
+    // Curvas a mostrar
+    struct Source { int key; Track* track; int kind; Colour colour; String name; bool isSum; };   // kind: 0 mono, 1 mid, 2 side, 3 suma
+    std::vector<Source> sources;
     if (msOn)
     {
-        // Mid = lo que está en el centro, Side = lo que está abierto a los costados
-        me.slot->buffer->read (me.end, N, specL.data(), specR.data());
-        for (int i = 0; i < N; ++i)
-            specMono[(size_t) i] = (specL[(size_t) i] + specR[(size_t) i]) * 0.5f;
-        spectrum.pushTrack (-2, specMono.data(), ScopeColours::left, "Mid");
-        for (int i = 0; i < N; ++i)
-            specMono[(size_t) i] = (specL[(size_t) i] - specR[(size_t) i]) * 0.5f;
-        spectrum.pushTrack (-3, specMono.data(), ScopeColours::right, "Side");
+        sources.push_back ({ -2, &me, 1, ScopeColours::left, "Mid", false });
+        sources.push_back ({ -3, &me, 2, ScopeColours::right, "Side", false });
     }
     else
     {
-        std::vector<float> sum;
-        if (multi && shown.size() >= 2)
-            sum.assign ((size_t) N, 0.0f);
-
         for (auto* t : shown)
+            sources.push_back ({ t->key, t, 0, multi ? t->colour : ScopeColours::left, t->name, false });
+        if (multi && shown.size() >= 2)
+            sources.push_back ({ -1, nullptr, 3, ScopeColours::textBright, "Suma", true });
+    }
+
+    // Lee N muestras de una fuente, terminando 'back' muestras antes del "ahora" (alineado entre pistas)
+    auto readTrack = [&] (Track& t, int64_t back, float* dst, bool add, int kind) -> bool
+    {
+        const int64_t endPos = (multi ? t.alignedEnd : t.end) - back;
+        if (endPos - N < t.end - (int64_t) ScopeRingBuffer::capacity + 4096)
+            return false;
+        t.slot->buffer->read (endPos, N, specL.data(), specR.data());
+        for (int i = 0; i < N; ++i)
         {
-            t->slot->buffer->read (multi ? t->alignedEnd : t->end, N, specL.data(), specR.data());
-            for (int i = 0; i < N; ++i)
-                specMono[(size_t) i] = (specL[(size_t) i] + specR[(size_t) i]) * 0.5f;
-            if (! sum.empty())
-                for (int i = 0; i < N; ++i) sum[(size_t) i] += specMono[(size_t) i];
-            spectrum.pushTrack (t->key, specMono.data(), multi ? t->colour : ScopeColours::left, t->name);
+            const float l = specL[(size_t) i], r = specR[(size_t) i];
+            const float v = kind == 2 ? (l - r) * 0.5f : (l + r) * 0.5f;
+            dst[i] = add ? dst[i] + v : v;
+        }
+        return true;
+    };
+    auto readSource = [&] (const Source& s, int64_t back, float* out) -> bool
+    {
+        if (s.kind == 3)
+        {
+            std::fill (out, out + N, 0.0f);
+            bool ok = true;
+            for (auto* t : shown)
+                ok = readTrack (*t, back, out, true, 0) && ok;
+            return ok;
+        }
+        return readTrack (*s.track, back, out, false, s.kind);
+    };
+
+    if (specMode == 0)
+    {
+        specStatus.clear();
+        spectrum.setOptions (! multi, msOn, spectroOn, specMode, trigger->name, specStatus);
+        spectrum.beginFrame (sr, multi);
+        for (auto& s : sources)
+        {
+            readSource (s, 0, specMono.data());
+            spectrum.pushTrack (s.key, specMono.data(), s.colour, s.name, s.isSum);
+        }
+    }
+    else
+    {
+        // Se recalcula ~10 veces por segundo; entre medio se dibuja lo último calculado
+        if (specCacheMode != specMode || ++specCounter % 6 == 1)
+        {
+            specCacheMode = specMode;
+            const int A = jlimit (2 * N, ScopeRingBuffer::capacity / 4, jmax (W, (int) (sr * (specMode == 2 ? 2.0 : 0.5))));
+            std::vector<int64_t> backs;
+
+            if (specMode == 1)
+            {
+                // Promedio: hasta 48 segmentos repartidos en la ventana
+                const int nSeg = jlimit (1, 48, A / N);
+                const double hop = nSeg > 1 ? (double) (A - N) / (nSeg - 1) : 0.0;
+                for (int k = 0; k < nSeg; ++k)
+                    backs.push_back ((int64_t) std::llround (k * hop));
+                specStatus.clear();
+            }
+            else
+            {
+                // Golpes: detecta los ataques de la pista de referencia y analiza los 85 ms siguientes
+                trigL.resize ((size_t) A); trigR.resize ((size_t) A); trigMono.resize ((size_t) A);
+                const int64_t trigEnd = multi ? trigger->alignedEnd : trigger->end;
+                trigger->slot->buffer->read (trigEnd, A, trigL.data(), trigR.data());
+                for (int i = 0; i < A; ++i)
+                    trigMono[(size_t) i] = (trigL[(size_t) i] + trigR[(size_t) i]) * 0.5f;
+
+                constexpr int blk = 256;
+                const int nb = A / blk;
+                std::vector<float> e ((size_t) nb, 0.0f);
+                float maxE = 0.0f;
+                for (int bIdx = 0; bIdx < nb; ++bIdx)
+                {
+                    double acc = 0.0;
+                    for (int i = bIdx * blk; i < (bIdx + 1) * blk; ++i) acc += (double) trigMono[(size_t) i] * trigMono[(size_t) i];
+                    e[(size_t) bIdx] = (float) (acc / blk);
+                    maxE = jmax (maxE, e[(size_t) bIdx]);
+                }
+                const int minGap = jmax (1, (int) (0.08 * sr / blk));
+                int last = -minGap;
+                for (int bIdx = 2; bIdx < nb; ++bIdx)
+                {
+                    const float floorE = jmin (e[(size_t) bIdx - 1], e[(size_t) bIdx - 2]);
+                    if (e[(size_t) bIdx] > maxE * 0.05f && e[(size_t) bIdx] > floorE * 8.0f && bIdx - last >= minGap)
+                    {
+                        const int onset = jmax (0, (bIdx - 1) * blk);
+                        const int64_t back = (int64_t) A - (onset + N);
+                        if (back >= 0)
+                            backs.push_back (back);
+                        last = bIdx;
+                    }
+                }
+                if (backs.size() > 24)
+                    backs.erase (backs.begin(), backs.end() - 24);
+                specStatus = backs.empty() ? u8 ("sin golpes de ") + trigger->name + u8 (" en la ventana")
+                                           : String ((int) backs.size()) + u8 (" golpes de ") + trigger->name;
+            }
+
+            specCache.clear();
+            segBuf.resize ((size_t) N);
+            const float gainDb = 20.0f * std::log10 (spectrum.getWindowGain());
+            for (auto& s : sources)
+            {
+                std::vector<double> acc ((size_t) N / 2 + 1, 0.0);
+                int count = 0;
+                for (auto back : backs)
+                    if (readSource (s, back, segBuf.data()))
+                    {
+                        analyzer.addSegment (segBuf.data(), acc);
+                        ++count;
+                    }
+                if (count == 0) continue;
+                std::vector<float> db (acc.size());
+                for (size_t i = 0; i < acc.size(); ++i)
+                    db[i] = jmax (-120.0f, (float) (10.0 * std::log10 (acc[i] / count + 1.0e-24)) + gainDb);
+                specCache[s.key] = std::move (db);
+            }
         }
 
-        // Suma real de las pistas (en el tiempo): muestra lo que se pierde cuando se cancelan
-        if (! sum.empty())
-            spectrum.pushTrack (-1, sum.data(), ScopeColours::textBright, "Suma", true);
+        spectrum.setOptions (! multi, msOn, spectroOn, specMode, trigger->name, specStatus);
+        spectrum.beginFrame (sr, multi);
+        for (auto& s : sources)
+        {
+            auto it = specCache.find (s.key);
+            if (it != specCache.end())
+                spectrum.pushDb (s.key, it->second, s.colour, s.name, s.isSum);
+        }
     }
     spectrum.endFrame();
+
 
     // Con ventanas muy largas (varios compases) bajamos a 30 cuadros por segundo para no cargar la Mac
     const int hz = W > 150000 ? 30 : 60;

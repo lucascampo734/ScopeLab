@@ -191,34 +191,26 @@ int main (int argc, char* argv[])
         sv.setHover (juce::Point<float> (left + (right - left) * t, (float) sv.getHeight() * 0.5f));
     };
 
-    // 1) Multipista: alineación, suma y LUFS
-    setParam ("view", 1); setParam ("sync", 2); setParam ("beats", 2); setParam ("split", 0.0f);
+    // 1) Multipista, 2 compases, espectro en PROMEDIO (ocultamos el Pad)
+    setParam ("view", 1); setParam ("sync", 2); setParam ("beats", 5); setParam ("split", 1.0f); setParam ("specmode", 1);
     settle (90);
-    feedToBeatFraction (1.0, 0.97);
+    feedToBeatFraction (8.0, 0.55);
+    save ("13_promedio.png");
+
+    // 2) Espectro en GOLPES del Kick (esta pista): qué suena debajo de cada kick
+    setParam ("specmode", 2);
+    settle (30);
     hoverAtHz (62.0f);
     editor->refresh();
-    save ("10_alineacion_suma.png");
-
-    // 2) Guardar referencia (la suma) y comparar con el Kick solo en Mid/Side, espectro ampliado
+    save ("14_golpes_kick.png");
     editor->getSpectrumView().setHover (std::nullopt);
-    settle (120);
-    editor->getSpectrumView().toggleReference();
-    setParam ("view", 0); setParam ("ms", 1.0f);
-    editor->setFocusPanel (2);
-    settle (90);
-    hoverAtHz (120.0f);
-    editor->refresh();
-    save ("11_referencia_midside.png");
 
-    // 3) Cascada (espectrograma) de la suma, ampliada
-    editor->getSpectrumView().setHover (std::nullopt);
-    editor->getSpectrumView().toggleReference();
-    setParam ("ms", 0.0f); setParam ("view", 1); setParam ("spectro", 1.0f);
-    settle (2);
-    settle (700);
-    save ("12_cascada.png");
-    setParam ("spectro", 0.0f);
-    editor->setFocusPanel (0);
+    // 3) Referencia de fase = Bass (clic en la fila del Bass)
+    editor->selectPhaseReferenceByName ("Bass");
+    setParam ("specmode", 1);
+    settle (60);
+    save ("15_referencia_bass.png");
+    editor->selectPhaseReferenceByName ("Kick");
 
     ed.reset();
     tracks.clear();

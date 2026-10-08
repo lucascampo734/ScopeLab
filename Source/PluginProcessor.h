@@ -103,6 +103,9 @@ public:
     std::vector<float> referenceSpectrum;
     juce::String referenceName;
 
+    // Pista elegida como referencia en el panel de fase (0 = esta pista)
+    int phaseReferenceKey = 0;
+
 private:
     juce::SharedResourcePointer<ScopeHub> hub;
     int slotIndex = -1;

@@ -213,6 +213,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ScopeLabAudioProcessor::crea
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "split", 1 }, "Separados", false));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "ms", 1 }, "Espectro Mid/Side", false));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "spectro", 1 }, "Cascada", false));
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { "specmode", 1 }, "Modo del espectro", StringArray { "Instante", "Promedio", "Golpes" }, 1));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "freeze", 1 }, "Congelar", false));
 
     return layout;

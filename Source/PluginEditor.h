@@ -95,15 +95,24 @@ public:
         bool hasSignal = false;
         bool alignValid = false;
         float lagMs = 0.0f, alignCorr = 0.0f;   // lag > 0: esta pista llega tarde
+        float overlapPct = 0.0f;                // % del tiempo que suena junto a la referencia
+        int key = 0;
     };
 
-    void setRows (std::vector<Row> newRows, const juce::String& refName, juce::Colour refColour, const juce::String& message);
+    void setRows (std::vector<Row> newRows, const juce::String& refName, juce::Colour refColour,
+                  const juce::String& message, bool refIsThis);
     void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+    std::function<void (int key)> onSelectReference;   // 0 = volver a esta pista
 
 private:
     std::vector<Row> rows;
+    std::vector<juce::Rectangle<float>> rowBounds;
+    juce::Rectangle<float> refBounds;
     juce::String refName, message;
     juce::Colour refColour;
+    bool refIsThis = true;
 };
 
 //==============================================================================
@@ -143,7 +152,11 @@ public:
     void endFrame();
     void paint (juce::Graphics&) override;
 
-    void setOptions (bool msAvailable, bool msEnabled, bool spectrogramEnabled);
+    void setOptions (bool msAvailable, bool msEnabled, bool spectrogramEnabled,
+                     int mode, const juce::String& triggerName, const juce::String& status);
+    // Curva ya calculada (en dB por bin), para los modos Promedio y Golpes
+    void pushDb (int key, const std::vector<float>& db, juce::Colour colour, const juce::String& name, bool isSum = false);
+    float getWindowGain() const noexcept { return windowGain; }
     void setReference (std::vector<float>* curve, juce::String* name) { reference = curve; referenceName = name; }
     void toggleReference();
 
@@ -155,7 +168,7 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
-    std::function<void()> onExpandToggle, onToggleMs, onToggleSpectrogram;
+    std::function<void()> onExpandToggle, onToggleMs, onToggleSpectrogram, onCycleMode;
 
 private:
     struct Curve
@@ -173,7 +186,11 @@ private:
     bool hitsHeaderControl (juce::Point<float> p) const;
 
     std::optional<juce::Point<float>> hoverPos;
-    juce::Rectangle<float> expandIcon, msChip, refChip, spectroChip, lastPlot;
+    Curve& curveFor (int key, juce::Colour colour, const juce::String& name, bool isSum);
+
+    juce::Rectangle<float> expandIcon, msChip, refChip, spectroChip, modeChip, lastPlot;
+    int mode = 0;
+    juce::String triggerName, status;
     bool expanded = false, collisions = false, msAvailable = false, msOn = false, spectroOn = false;
 
     std::vector<float>* reference = nullptr;
@@ -193,6 +210,29 @@ private:
 };
 
 //==============================================================================
+// Suma la potencia de varios segmentos de fftSize muestras (promedio de Welch).
+class PowerAnalyzer
+{
+public:
+    static constexpr int size = SpectrumView::fftSize;
+
+    void addSegment (const float* x, std::vector<double>& acc)
+    {
+        std::copy (x, x + size, buf.begin());
+        std::fill (buf.begin() + size, buf.end(), 0.0f);
+        window.multiplyWithWindowingTable (buf.data(), (size_t) size);
+        fft.performFrequencyOnlyForwardTransform (buf.data(), true);
+        for (size_t i = 0; i < acc.size(); ++i)
+            acc[i] += (double) buf[i] * buf[i];
+    }
+
+private:
+    juce::dsp::FFT fft { SpectrumView::fftOrder };
+    juce::dsp::WindowingFunction<float> window { (size_t) size, juce::dsp::WindowingFunction<float>::hann, false };
+    std::vector<float> buf = std::vector<float> ((size_t) size * 2, 0.0f);
+};
+
+//==============================================================================
 class ScopeLabAudioProcessorEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -208,6 +248,7 @@ public:
     // 0 = normal, 1 = osciloscopio ampliado, 2 = espectro ampliado
     void setFocusPanel (int panel);
     SpectrumView& getSpectrumView() noexcept { return spectrum; }
+    void selectPhaseReferenceByName (const juce::String& name);   // usado por la herramienta de capturas
 
 private:
     struct Track
@@ -227,7 +268,7 @@ private:
     void drawMeter (juce::Graphics&, juce::Rectangle<float>, float level, juce::Colour, const juce::String& name);
     void drawLoudness (juce::Graphics&, juce::Rectangle<float>);
     void mouseDown (const juce::MouseEvent&) override;
-    void updatePhase (std::vector<Track*>& tracks, Track& me, bool aligned);
+    void updatePhase (std::vector<Track*>& tracks, Track& me, bool aligned, int windowSamples);
 
     using SliderAttachment   = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
@@ -260,8 +301,19 @@ private:
     std::atomic<float>* freezeParam = nullptr;
     std::atomic<float>* msParam     = nullptr;
     std::atomic<float>* spectroParam = nullptr;
+    std::atomic<float>* specModeParam = nullptr;
 
-    struct AlignInfo { float lagMs = 0.0f, corr = 0.0f; bool valid = false; };
+    PowerAnalyzer analyzer;
+    std::map<int, std::vector<float>> specCache;
+    juce::String specStatus;
+    int specCounter = 0, specCacheMode = -1;
+    std::vector<float> trigL, trigR, trigMono, segBuf, refFull, othFull, refLowL, othLowL, refDec, othDec;
+
+    struct AlignInfo
+    {
+        float lagMs = 0.0f, corr = 0.0f; bool valid = false;            // alineación
+        float low = 0.0f, full = 0.0f, overlap = 0.0f; bool hasSignal = false, measured = false;
+    };
     std::map<int, AlignInfo> alignInfo;
     std::vector<float> alignL, alignR, alignMono, alignLow, alignRef, alignOther;
     int frameCounter = 0;

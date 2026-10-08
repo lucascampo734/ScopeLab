@@ -14,7 +14,12 @@ jobs:
             name: ScopeLab-Windows
           - os: macos-latest
             name: ScopeLab-Mac
+          # Respaldo: si no hay Macs con chip Apple libres, compila en una Intel.
+          # El resultado es universal (Apple Silicon + Intel) en ambos casos.
+          - os: macos-15-intel
+            name: ScopeLab-Mac-b
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4

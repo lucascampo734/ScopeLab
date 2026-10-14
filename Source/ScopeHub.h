@@ -185,6 +185,16 @@ public:
 
     ScopeSlot& slot (int index) noexcept { return slots[(size_t) index]; }
 
+    // "Escuchar banda": la ventana que lo activa elige frecuencia y qué pistas se filtran
+    struct Audition
+    {
+        std::atomic<bool>     on    { false };
+        std::atomic<float>    freq  { 1000.0f };
+        std::atomic<uint32_t> mask  { 0 };     // un bit por lugar del hub
+        std::atomic<int>      owner { -1 };    // lugar de la ventana que lo activó
+    };
+    Audition audition;
+
 private:
     juce::CriticalSection lock;
     std::array<ScopeSlot, maxSlots> slots;

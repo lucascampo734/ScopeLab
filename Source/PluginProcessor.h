@@ -56,6 +56,42 @@ private:
 };
 
 //==============================================================================
+// Pasa-banda de 4.º orden (dos biquads) para escuchar una franja del espectro.
+class AuditionFilter
+{
+public:
+    void setBandpass (double fs, double freq, double q) noexcept
+    {
+        const double w0 = juce::MathConstants<double>::twoPi * freq / fs;
+        const double alpha = std::sin (w0) / (2.0 * q);
+        const double a0 = 1.0 + alpha;
+        b0 = alpha / a0; b1 = 0.0; b2 = -alpha / a0;
+        a1 = -2.0 * std::cos (w0) / a0;
+        a2 = (1.0 - alpha) / a0;
+    }
+
+    float process (int stage, int ch, float x) noexcept
+    {
+        auto& s = state[(size_t) stage][(size_t) ch];
+        const double y = b0 * x + s[0];
+        s[0] = b1 * x - a1 * y + s[1];
+        s[1] = b2 * x - a2 * y;
+        return (float) y;
+    }
+
+    void reset() noexcept
+    {
+        for (auto& stage : state)
+            for (auto& ch : stage)
+                ch = { 0.0, 0.0 };
+    }
+
+private:
+    double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+    std::array<std::array<std::array<double, 2>, 2>, 2> state {};   // [etapa][canal][z1,z2]
+};
+
+//==============================================================================
 class ScopeLabAudioProcessor : public juce::AudioProcessor
 {
 public:
@@ -107,6 +143,11 @@ public:
     int phaseReferenceKey = 0;
 
 private:
+    void applyAudition (juce::AudioBuffer<float>& buffer, int numChannels, int numSamples) noexcept;
+
+    AuditionFilter auditionFilter;
+    float auditionGain = 0.0f, auditionFreq = 1000.0f;
+
     juce::SharedResourcePointer<ScopeHub> hub;
     int slotIndex = -1;
     std::unique_ptr<ScopeSlot> privateSlot;   // solo si se llenan los 16 lugares del hub

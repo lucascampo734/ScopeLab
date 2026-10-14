@@ -883,6 +883,86 @@ void SpectrumView::mouseDown (const MouseEvent& e)
     if (modeChip.contains (p))                   { if (onCycleMode) onCycleMode(); return; }
     if (spectroChip.contains (p))                { if (onToggleSpectrogram) onToggleSpectrogram(); return; }
     if (refChip.contains (p))                    { toggleReference(); return; }
+
+    // Clic sostenido sobre el gráfico = escuchar esa banda
+    if (lastPlot.contains (p) && onAudition)
+    {
+        auditioning = true;
+        auditionHz = frequencyAt (p);
+        onAudition (true, auditionHz);
+        repaint();
+    }
+}
+
+void SpectrumView::mouseDrag (const MouseEvent& e)
+{
+    setHover (e.position);
+    if (auditioning && onAudition)
+    {
+        auditionHz = frequencyAt (e.position);
+        onAudition (true, auditionHz);
+    }
+}
+
+void SpectrumView::mouseUp (const MouseEvent&)
+{
+    if (auditioning)
+    {
+        auditioning = false;
+        if (onAudition) onAudition (false, auditionHz);
+        repaint();
+    }
+}
+
+float SpectrumView::frequencyAt (Point<float> p) const
+{
+    // En el espectro la frecuencia va en horizontal; en la cascada, en vertical
+    const float t = spectroOn ? (lastPlot.getBottom() - p.y) / jmax (1.0f, lastPlot.getHeight())
+                              : (p.x - lastPlot.getX()) / jmax (1.0f, lastPlot.getWidth());
+    return specMinF * std::pow (specMaxF / specMinF, jlimit (0.0f, 1.0f, t));
+}
+
+void SpectrumView::drawAudition (Graphics& g, Rectangle<float> area)
+{
+    if (! auditioning)
+        return;
+
+    // Franja de ~media octava que se está escuchando
+    const float f0 = auditionHz / std::pow (2.0f, 0.25f), f1 = auditionHz * std::pow (2.0f, 0.25f);
+    const float span = std::log (specMaxF / specMinF);
+    Rectangle<float> band;
+    if (spectroOn)
+    {
+        auto yOfF = [&] (float f) { return area.getBottom() - area.getHeight() * std::log (f / specMinF) / span; };
+        band = Rectangle<float>::leftTopRightBottom (area.getX(), yOfF (f1), area.getRight(), yOfF (f0));
+    }
+    else
+    {
+        auto xOfF = [&] (float f) { return area.getX() + area.getWidth() * std::log (f / specMinF) / span; };
+        band = Rectangle<float>::leftTopRightBottom (xOfF (f0), area.getY(), xOfF (f1), area.getBottom());
+    }
+    band = band.getIntersection (area);
+
+    g.setColour (ScopeColours::caution.withAlpha (0.16f));
+    g.fillRect (band);
+    g.setColour (ScopeColours::caution.withAlpha (0.8f));
+    if (spectroOn)
+    {
+        g.drawHorizontalLine (roundToInt (band.getY()), area.getX(), area.getRight());
+        g.drawHorizontalLine (roundToInt (band.getBottom()), area.getX(), area.getRight());
+    }
+    else
+    {
+        g.drawVerticalLine (roundToInt (band.getX()), area.getY(), area.getBottom());
+        g.drawVerticalLine (roundToInt (band.getRight()), area.getY(), area.getBottom());
+    }
+
+    auto label = Rectangle<float> (200.0f, 22.0f).withCentre ({ area.getCentreX(), area.getBottom() - 18.0f });
+    g.setColour (ScopeColours::bg.withAlpha (0.9f));
+    g.fillRoundedRectangle (label, 4.0f);
+    g.setColour (ScopeColours::caution);
+    g.setFont (uiFont (12.0f, true));
+    g.drawText (u8 ("ESCUCHANDO  ") + formatHz (auditionHz), label, Justification::centred);
 }
 
 void SpectrumView::mouseDoubleClick (const MouseEvent& e)
@@ -996,6 +1076,7 @@ void SpectrumView::paint (Graphics& g)
         if (it != curves.end())
             g.drawText ("muestra: " + it->second.name, header, Justification::centredRight);
         paintSpectrogram (g, area, leftLabels, bottomLabels);
+        drawAudition (g, area);
         return;
     }
 
@@ -1226,8 +1307,8 @@ void SpectrumView::paint (Graphics& g)
 
         const bool named = items.size() > 1;
         const float lineH = 15.0f;
-        const float boxW = named ? 190.0f : 150.0f;
-        const float boxH = 10.0f + lineH * (2.0f + (float) items.size());
+        const float boxW = named ? 190.0f : 160.0f;
+        const float boxH = 10.0f + lineH * (3.0f + (float) items.size());
         auto box = Rectangle<float> (x + 12.0f, area.getY() + 6.0f, boxW, boxH);
         if (box.getRight() > area.getRight()) box.setX (x - 12.0f - boxW);
 
@@ -1257,7 +1338,12 @@ void SpectrumView::paint (Graphics& g)
             g.setFont (uiFont (11.0f, true));
             g.drawText (String (it.db, 1) + " dB", row, named ? Justification::centredRight : Justification::centredLeft);
         }
+        g.setFont (uiFont (10.0f));
+        g.setColour (ScopeColours::text);
+        g.drawText (u8 ("mantené el clic para escucharla"), inner.removeFromTop (lineH), Justification::centredLeft);
     }
+
+    drawAudition (g, area);
 }
 
 //==============================================================================
@@ -1308,6 +1394,7 @@ ScopeLabAudioProcessorEditor::ScopeLabAudioProcessorEditor (ScopeLabAudioProcess
         refresh();
     };
     spectrum.setReference (&proc.referenceSpectrum, &proc.referenceName);
+    spectrum.onAudition = [this] (bool on, float freq) { setAudition (on, freq); };
 
     addAndMakeVisible (trackBar);
     addAndMakeVisible (wave);
@@ -1374,6 +1461,7 @@ ScopeLabAudioProcessorEditor::ScopeLabAudioProcessorEditor (ScopeLabAudioProcess
 
 ScopeLabAudioProcessorEditor::~ScopeLabAudioProcessorEditor()
 {
+    setAudition (false, 0.0f);
     stopTimer();
     setLookAndFeel (nullptr);
 }
@@ -1436,6 +1524,24 @@ void ScopeLabAudioProcessorEditor::setFocusPanel (int panel)
     spectrum.setExpanded (focusPanel == 2);
     resized();
     refresh();
+}
+
+void ScopeLabAudioProcessorEditor::setAudition (bool on, float freq)
+{
+    auto& au = proc.getHub().audition;
+    const int mySlot = proc.getSlotIndex();
+    if (on)
+    {
+        const uint32_t self = mySlot >= 0 ? (1u << (uint32_t) mySlot) : 0u;
+        au.freq.store (freq);
+        au.mask.store (auditionMask != 0 ? auditionMask : self);
+        au.owner.store (mySlot);
+        au.on.store (true);
+    }
+    else if (au.owner.load() == mySlot)
+    {
+        au.on.store (false);
+    }
 }
 
 void ScopeLabAudioProcessorEditor::drawMeter (Graphics& g, Rectangle<float> r, float level, Colour colour, const String& name)
@@ -1769,6 +1875,7 @@ void ScopeLabAudioProcessorEditor::refresh()
         Track t;
         t.key = (index + 1) + 32 * (int) (s.generation.load() % 1000000u);
         t.slot = &s;
+        t.slotIndex = index;
         t.name = s.getName();
         t.colour = s.getColour();
         t.isThis = isThis;
@@ -1956,6 +2063,12 @@ void ScopeLabAudioProcessorEditor::refresh()
     for (auto* t : used)
         if (t->visible || ! multi)
             shown.push_back (t);
+
+    // Escuchar banda: en multipista se filtran todas las pistas visibles; si no, solo esta
+    auditionMask = 0;
+    for (auto* t : shown)
+        if (t->slotIndex >= 0 && t->slotIndex < 32)
+            auditionMask |= 1u << (uint32_t) t->slotIndex;
 
     if (! multi)
     {

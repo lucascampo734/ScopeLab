@@ -36,6 +36,7 @@ Para que se alineen, el DAW tiene que estar en Play. En Ableton los nombres y co
 - **MID/SIDE**: separa el espectro de una pista en centro y costados.
 - **Modos del espectro** (botón a la izquierda de GUARDAR REF): *INSTANTE* (lo último que sonó), *PROMEDIO* (promedio sobre la duración elegida, ideal para comparar) y *GOLPES* (solo lo que suena justo cuando pega la pista de referencia, por ejemplo el kick).
 - **Referencia del panel de fase**: clic en una pista del panel para compararlas todas contra ella (también define la pista que dispara el modo GOLPES). Mide sobre la duración elegida y muestra qué porcentaje del tiempo suenan juntas.
+- **Escuchar una banda** (como en SPAN Plus): mantené apretado el clic sobre el espectro para escuchar solo esa franja (~media octava); arrastrá para moverla y soltá para volver al audio normal. En *Esta pista* se filtra esa pista; en *Multipista*, todas las pistas visibles con ScopeLab. El osciloscopio y los medidores siguen mostrando el audio completo.
 - **GUARDAR REF**: congela la curva actual como referencia punteada, para comparar.
 - **CASCADA**: espectrograma que muestra cómo cambia el espectro en el tiempo.
 - Medidores de pico, **zoom vertical** y botón **Congelar**.

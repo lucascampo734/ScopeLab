@@ -163,8 +163,13 @@ public:
     void setExpanded (bool e) { expanded = e; repaint(); }
     void setHover (std::optional<juce::Point<float>> p) { hoverPos = p; repaint(); }
     void mouseMove (const juce::MouseEvent& e) override  { setHover (e.position); }
-    void mouseDrag (const juce::MouseEvent& e) override  { setHover (e.position); }
-    void mouseExit (const juce::MouseEvent&) override    { setHover (std::nullopt); }
+    void mouseDrag (const juce::MouseEvent& e) override;
+    void mouseUp (const juce::MouseEvent& e) override;
+    void mouseExit (const juce::MouseEvent&) override    { if (! auditioning) setHover (std::nullopt); }
+
+    // Escuchar banda: true + frecuencia al apretar/arrastrar, false al soltar
+    std::function<void (bool on, float freq)> onAudition;
+    void showAuditionForTest (bool on, float hz) { auditioning = on; auditionHz = hz; repaint(); }
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
@@ -186,6 +191,10 @@ private:
     bool hitsHeaderControl (juce::Point<float> p) const;
 
     std::optional<juce::Point<float>> hoverPos;
+    bool auditioning = false;
+    float auditionHz = 1000.0f;
+    float frequencyAt (juce::Point<float> p) const;
+    void drawAudition (juce::Graphics&, juce::Rectangle<float> area);
     Curve& curveFor (int key, juce::Colour colour, const juce::String& name, bool isSum);
 
     juce::Rectangle<float> expandIcon, msChip, refChip, spectroChip, modeChip, lastPlot;
@@ -261,6 +270,7 @@ private:
         ScopeTransport transport;
         double sampleRate = 48000.0;
         int64_t end = 0, alignedEnd = 0;
+        int slotIndex = -1;
         std::vector<float> l, r;   // ventana a dibujar
     };
 
@@ -324,6 +334,8 @@ private:
     std::map<int, std::pair<float, float>> corrSmooth;
     std::vector<float> tmpL, tmpR, tmpMono, gL, gR, specL, specR, specMono, refMono, refLow, otherMono, otherLow;
     int focusPanel = 0, currentHz = 60;
+    uint32_t auditionMask = 0;   // pistas que se filtran al escuchar una banda (se actualiza en refresh)
+    void setAudition (bool on, float freq);
     float holdL = 0.0f, holdR = 0.0f;
     int holdCounterL = 0, holdCounterR = 0;
     juce::Rectangle<int> headerArea, controlsArea;

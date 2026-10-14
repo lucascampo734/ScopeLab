@@ -298,6 +298,46 @@ void ScopeLabAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     const float pr = numIn > 1 ? buffer.getMagnitude (1, 0, n) : pl;
     if (pl > peakLeft.load (std::memory_order_relaxed))  peakLeft.store (pl, std::memory_order_relaxed);
     if (pr > peakRight.load (std::memory_order_relaxed)) peakRight.store (pr, std::memory_order_relaxed);
+
+    // Lo que se ve y se mide es el audio completo; el filtro solo cambia lo que se escucha
+    applyAudition (buffer, juce::jmin (numIn, numOut), n);
+}
+
+void ScopeLabAudioProcessor::applyAudition (juce::AudioBuffer<float>& buffer, int numChannels, int n) noexcept
+{
+    bool want = false;
+    float target = auditionFreq;
+    if (slotIndex >= 0)
+    {
+        auto& au = hub->audition;
+        want = au.on.load (std::memory_order_relaxed)
+            && ((au.mask.load (std::memory_order_relaxed) >> (uint32_t) slotIndex) & 1u) != 0;
+        target = au.freq.load (std::memory_order_relaxed);
+    }
+
+    if (! want && auditionGain <= 0.0f)
+        return;
+
+    const double fs = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
+    auditionFreq = auditionGain <= 0.0f ? target : auditionFreq + (target - auditionFreq) * 0.5f;   // desliza suave al arrastrar
+    auditionFilter.setBandpass (fs, juce::jlimit (20.0, fs * 0.45, (double) auditionFreq), 1.6);
+
+    const float step = (float) (1.0 / (0.01 * fs));   // entra y sale en 10 ms, sin clicks
+    const int channels = juce::jmin (2, numChannels);
+    for (int i = 0; i < n; ++i)
+    {
+        auditionGain = want ? juce::jmin (1.0f, auditionGain + step) : juce::jmax (0.0f, auditionGain - step);
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            float* d = buffer.getWritePointer (ch);
+            const float x = d[i];
+            const float y = auditionFilter.process (1, ch, auditionFilter.process (0, ch, x));
+            d[i] = x + (y - x) * auditionGain;
+        }
+    }
+
+    if (! want && auditionGain <= 0.0f)
+        auditionFilter.reset();
 }
 
 juce::AudioProcessorEditor* ScopeLabAudioProcessor::createEditor()

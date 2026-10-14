@@ -217,6 +217,58 @@ int main (int argc, char* argv[])
     save ("15_referencia_bass.png");
     editor->selectPhaseReferenceByName ("Kick");
 
+    // 5) Escuchar banda: captura con la franja resaltada
+    setParam ("view", 1); setParam ("sync", 2); setParam ("beats", 4); setParam ("specmode", 1);
+    settle (30);
+    editor->getSpectrumView().showAuditionForTest (true, 70.0f);
+    editor->refresh();
+    save ("17_escuchar_banda.png");
+    editor->getSpectrumView().showAuditionForTest (false, 70.0f);
+
+    // 6) Prueba de audio del filtro: 55 Hz + 2 kHz, escuchando la banda de 2 kHz
+    {
+        auto& p = tracks.front()->proc;
+        auto& au = p.getHub().audition;
+        auto measure = [&] (bool on, double& low, double& high)
+        {
+            au.freq.store (2000.0f);
+            au.mask.store (on ? (1u << (uint32_t) p.getSlotIndex()) : 0u);
+            au.on.store (on);
+            juce::AudioBuffer<float> b (2, block);
+            low = high = 0.0;
+            double cl = 0, sl = 0, ch = 0, sh = 0;
+            for (int blk = 0; blk < 240; ++blk)
+            {
+                for (int i = 0; i < block; ++i)
+                {
+                    const double t = (double) (blk * block + i) / sr;
+                    const float v = (float) (0.5 * std::sin (2 * juce::MathConstants<double>::pi * 55.0 * t)
+                                           + 0.5 * std::sin (2 * juce::MathConstants<double>::pi * 2000.0 * t));
+                    b.setSample (0, i, v); b.setSample (1, i, v);
+                }
+                p.processBlock (b, midi);
+                if (blk < 120) continue;   // dejar que entre el filtro
+                for (int i = 0; i < block; ++i)
+                {
+                    const double t = (double) (blk * block + i) / sr;
+                    const double y = b.getSample (0, i);
+                    cl += y * std::cos (2 * juce::MathConstants<double>::pi * 55.0 * t);
+                    sl += y * std::sin (2 * juce::MathConstants<double>::pi * 55.0 * t);
+                    ch += y * std::cos (2 * juce::MathConstants<double>::pi * 2000.0 * t);
+                    sh += y * std::sin (2 * juce::MathConstants<double>::pi * 2000.0 * t);
+                }
+            }
+            low = std::sqrt (cl * cl + sl * sl); high = std::sqrt (ch * ch + sh * sh);
+        };
+        double l0, h0, l1, h1;
+        measure (false, l0, h0);
+        measure (true, l1, h1);
+        au.on.store (false);
+        std::printf ("sin filtro: 55Hz=%.1f  2kHz=%.1f\n", l0, h0);
+        std::printf ("escuchando 2 kHz: 55Hz %.1f dB, 2kHz %.1f dB\n",
+                     20 * std::log10 (l1 / l0), 20 * std::log10 (h1 / h0));
+    }
+
     ed.reset();
     tracks.clear();
     std::puts ("ok");

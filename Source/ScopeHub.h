@@ -190,6 +190,7 @@ public:
     {
         std::atomic<bool>     on    { false };
         std::atomic<float>    freq  { 1000.0f };
+        std::atomic<float>    width { 0.5f };   // ancho de la franja, en octavas
         std::atomic<uint32_t> mask  { 0 };     // un bit por lugar del hub
         std::atomic<int>      owner { -1 };    // lugar de la ventana que lo activó
     };

@@ -306,13 +306,14 @@ void ScopeLabAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
 void ScopeLabAudioProcessor::applyAudition (juce::AudioBuffer<float>& buffer, int numChannels, int n) noexcept
 {
     bool want = false;
-    float target = auditionFreq;
+    float target = auditionFreq, widthOct = 0.5f;
     if (slotIndex >= 0)
     {
         auto& au = hub->audition;
         want = au.on.load (std::memory_order_relaxed)
             && ((au.mask.load (std::memory_order_relaxed) >> (uint32_t) slotIndex) & 1u) != 0;
         target = au.freq.load (std::memory_order_relaxed);
+        widthOct = juce::jlimit (0.1f, 4.0f, au.width.load (std::memory_order_relaxed));
     }
 
     if (! want && auditionGain <= 0.0f)
@@ -320,7 +321,12 @@ void ScopeLabAudioProcessor::applyAudition (juce::AudioBuffer<float>& buffer, in
 
     const double fs = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
     auditionFreq = auditionGain <= 0.0f ? target : auditionFreq + (target - auditionFreq) * 0.5f;   // desliza suave al arrastrar
-    auditionFilter.setBandpass (fs, juce::jlimit (20.0, fs * 0.45, (double) auditionFreq), 1.6);
+    // Dos etapas en cascada angostan la banda ~0.64x: cada etapa usa un ancho 1.55x mayor
+    // para que el ancho total a -3 dB coincida con la franja dibujada
+    const double bwStage = 1.55 * (double) widthOct;
+    const double r = std::pow (2.0, bwStage);
+    const double q = std::sqrt (r) / (r - 1.0);
+    auditionFilter.setBandpass (fs, juce::jlimit (20.0, fs * 0.45, (double) auditionFreq), q);
 
     const float step = (float) (1.0 / (0.01 * fs));   // entra y sale en 10 ms, sin clicks
     const int channels = juce::jmin (2, numChannels);

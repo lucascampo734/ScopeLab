@@ -167,8 +167,10 @@ public:
     void mouseUp (const juce::MouseEvent& e) override;
     void mouseExit (const juce::MouseEvent&) override    { if (! auditioning) setHover (std::nullopt); }
 
-    // Escuchar banda: true + frecuencia al apretar/arrastrar, false al soltar
-    std::function<void (bool on, float freq)> onAudition;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+
+    // Escuchar banda: true + frecuencia + ancho (octavas) al apretar/arrastrar/girar la rueda, false al soltar
+    std::function<void (bool on, float freq, float widthOct)> onAudition;
     void showAuditionForTest (bool on, float hz) { auditioning = on; auditionHz = hz; repaint(); }
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
@@ -192,7 +194,7 @@ private:
 
     std::optional<juce::Point<float>> hoverPos;
     bool auditioning = false;
-    float auditionHz = 1000.0f;
+    float auditionHz = 1000.0f, auditionWidth = 0.5f;
     float frequencyAt (juce::Point<float> p) const;
     void drawAudition (juce::Graphics&, juce::Rectangle<float> area);
     Curve& curveFor (int key, juce::Colour colour, const juce::String& name, bool isSum);
@@ -335,7 +337,7 @@ private:
     std::vector<float> tmpL, tmpR, tmpMono, gL, gR, specL, specR, specMono, refMono, refLow, otherMono, otherLow;
     int focusPanel = 0, currentHz = 60;
     uint32_t auditionMask = 0;   // pistas que se filtran al escuchar una banda (se actualiza en refresh)
-    void setAudition (bool on, float freq);
+    void setAudition (bool on, float freq, float widthOct);
     float holdL = 0.0f, holdR = 0.0f;
     int holdCounterL = 0, holdCounterR = 0;
     juce::Rectangle<int> headerArea, controlsArea;

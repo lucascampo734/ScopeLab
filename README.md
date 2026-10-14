@@ -21,7 +21,7 @@ Para que se alineen, el DAW tiene que estar en Play. En Ableton los nombres y co
 ## Otras funciones
 
 - **Osciloscopio** con tres modos de sincronía:
-  - *Libre*: muestra la ventana de tiempo elegida.
+  - *Libre*: muestra la ventana de tiempo elegida, de 1 ms a 10 s (podés escribir el valor, por ejemplo "3.84 s" o "500 ms").
   - *Trigger*: se engancha al cruce por cero de los graves para que la onda quede quieta.
   - *Tempo del DAW*: la ventana dura entre 1/4 de tiempo y 4 compases, y se dibuja con barrido como un osciloscopio real.
 - Vista **Esta pista (L/R)** con goniómetro (Mid/Side) y medidor de correlación L/R.

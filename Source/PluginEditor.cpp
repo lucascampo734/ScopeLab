@@ -1897,7 +1897,9 @@ void ScopeLabAudioProcessorEditor::refresh()
     if (! done && sync >= 1)
     {
         // Trigger sobre esta pista; las demás usan el mismo desplazamiento
-        const int R = W * 2;
+        // Busca el trigger dentro de hasta 1 s extra (no hace falta más, y con ventanas largas ahorra trabajo)
+        const int extra = jlimit (16, W, (int) sr);
+        const int R = W + extra;
         tmpL.resize ((size_t) R); tmpR.resize ((size_t) R); tmpMono.resize ((size_t) R);
         me.slot->buffer->read (me.alignedEnd, R, tmpL.data(), tmpR.data());
 
@@ -1911,8 +1913,8 @@ void ScopeLabAudioProcessorEditor::refresh()
         }
 
         const float hyst = energy * 0.05f;
-        int start = W;
-        for (int t = W; t > 1; --t)
+        int start = extra;
+        for (int t = extra; t > 1; --t)
         {
             if (tmpMono[(size_t) t - 1] <= 0.0f && tmpMono[(size_t) t] > 0.0f)
             {

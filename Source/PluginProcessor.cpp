@@ -184,14 +184,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout ScopeLabAudioProcessor::crea
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout layout;
 
-    NormalisableRange<float> timeRange (1.0f, 1000.0f, 0.01f);
-    timeRange.setSkewForCentre (40.0f);
+    // Hasta 10 s en modo Libre/Trigger (a 125 BPM: 4 compases)
+    NormalisableRange<float> timeRange (1.0f, 10000.0f, 0.01f);
+    timeRange.setSkewForCentre (100.0f);
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { "time", 1 }, "Ventana", timeRange, 20.0f,
         AudioParameterFloatAttributes()
             .withLabel ("ms")
-            .withStringFromValueFunction ([] (float v, int) { return v < 100.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms"; })));
+            .withStringFromValueFunction ([] (float v, int)
+            {
+                if (v < 100.0f)  return String (v, 1) + " ms";
+                if (v < 1000.0f) return String (roundToInt (v)) + " ms";
+                return String (v / 1000.0f, 2) + " s";
+            })
+            .withValueFromStringFunction ([] (const String& text)
+            {
+                const auto t = text.trim().toLowerCase();
+                const float v = t.getFloatValue();
+                return t.endsWith ("ms") ? v : (t.endsWith ("s") ? v * 1000.0f : v);
+            })));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { "gain", 1 }, "Zoom vertical", NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f,

@@ -191,6 +191,11 @@ int main (int argc, char* argv[])
         sv.setHover (juce::Point<float> (left + (right - left) * t, (float) sv.getHeight() * 0.5f));
     };
 
+    // 0) Modo Libre con ventana larga: 2 compases a 124 BPM = 3.87 s
+    setParam ("view", 1); setParam ("sync", 0); setParam ("time", 3870.0f); setParam ("split", 1.0f); setParam ("specmode", 1);
+    settle (60);
+    save ("16_libre_2_compases.png");
+
     // 1) Multipista, 2 compases, espectro en PROMEDIO (ocultamos el Pad)
     setParam ("view", 1); setParam ("sync", 2); setParam ("beats", 5); setParam ("split", 1.0f); setParam ("specmode", 1);
     settle (90);

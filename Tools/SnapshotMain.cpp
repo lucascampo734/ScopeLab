@@ -225,6 +225,42 @@ int main (int argc, char* argv[])
     save ("17_escuchar_banda.png");
     editor->getSpectrumView().showAuditionForTest (false, 70.0f);
 
+    // 7) Modo limpio: solo el espectro, ventana ancha como en un monitor aparte
+    editor->getSpectrumView().showAuditionForTest (false, 70.0f);
+    setParam ("view", 1); setParam ("specmode", 1);
+    editor->setCleanMode (true, 2);
+    editor->setSize (1500, 520);
+    settle (40);
+    save ("18_limpio_espectro.png");
+    hoverAtHz (62.0f);   // el mouse encima muestra el encabezado y la lectura
+    editor->refresh();
+    save ("19_limpio_espectro_hover.png");
+    editor->getSpectrumView().setHover (std::nullopt);
+
+    // 8) Ajustes: solo graves (20-500 Hz), rango -60..+6, sin inclinación, sin relleno, línea gruesa
+    editor->toggleSettings (2);
+    {
+        auto u = main.apvts.state.getOrCreateChildWithName ("UI", nullptr);
+        u.setProperty ("specMinF", 20.0, nullptr);  u.setProperty ("specMaxF", 500.0, nullptr);
+        u.setProperty ("specBottom", -60.0, nullptr); u.setProperty ("specTilt", 0.0, nullptr);
+        u.setProperty ("specFill", false, nullptr);  u.setProperty ("specLine", 2.5, nullptr);
+    }
+    editor->toggleSettings (2); editor->toggleSettings (2);   // reabrir para que muestre los valores nuevos
+    settle (40);
+    save ("20_ajustes_graves.png");
+    editor->toggleSettings (2);
+
+    // 9) Modo limpio con la onda, ventana chica
+    editor->setCleanMode (true, 1);
+    editor->setSize (700, 260);
+    settle (30);
+    save ("21_limpio_onda.png");
+    editor->setCleanMode (false, 1);
+    editor->setFocusPanel (0);
+    editor->setSize (1040, 660);
+    settle (20);
+    save ("22_normal_firma.png");
+
     // 6) Prueba de audio: respuesta del filtro según el ancho elegido (centro 1 kHz)
     {
         auto& p = tracks.front()->proc;

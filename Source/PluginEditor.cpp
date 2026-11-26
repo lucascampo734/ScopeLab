@@ -87,8 +87,33 @@ namespace
         return (db > 0.0f ? "+" : "") + (whole ? String (roundToInt (db)) : String (db, 1));
     }
 
-    constexpr float specMinF = 20.0f, specMaxF = 20000.0f, specTopDb = 6.0f, specBottomDb = -90.0f;
-    float specTilt (float f) { return 4.5f * std::log2 (f / 1000.0f); }
+    // Botón chico de encabezado (AJUSTES, LIMPIO…)
+    void drawChip (Graphics& g, Rectangle<float> r, const String& text, bool on)
+    {
+        g.setFont (uiFont (10.0f, true));
+        g.setColour (on ? ScopeColours::left.withAlpha (0.22f) : ScopeColours::panel);
+        g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (on ? ScopeColours::left : ScopeColours::gridStrong);
+        g.drawRoundedRectangle (r, 3.0f, 1.0f);
+        g.setColour (on ? ScopeColours::textBright : ScopeColours::text);
+        g.drawText (text, r, Justification::centred);
+    }
+
+    Rectangle<float> takeChipRight (Graphics& g, Rectangle<float>& header, const String& text)
+    {
+        g.setFont (uiFont (10.0f, true));
+        const float w = GlyphArrangement::getStringWidth (g.getCurrentFont(), text) + 16.0f;
+        auto r = header.removeFromRight (w).reduced (0.0f, 0.5f);
+        header.removeFromRight (6.0f);
+        return r;
+    }
+
+    // Franja oscura detrás del encabezado cuando se superpone al gráfico (modo limpio)
+    void drawHeaderStrip (Graphics& g, Rectangle<float> header)
+    {
+        g.setColour (ScopeColours::bg.withAlpha (0.82f));
+        g.fillRoundedRectangle (header.expanded (6.0f, 4.0f), 4.0f);
+    }
 
     // Filtro pasa-bajos de 2 polos (aprox. 150 Hz) para medir la fase en graves
     void lowpass (const std::vector<float>& in, std::vector<float>& out, double sr, float cutoff)
@@ -206,7 +231,7 @@ void WaveformView::drawSeries (Graphics& g, Rectangle<float> lane, const ScopeSe
     auto yOf = [&] (float v) { return cy - jlimit (-1.0f, 1.0f, v * gain) * halfH; };
 
     const float glowAlpha = s.isSum ? 0.0f : 0.15f;
-    const float lineWidth = s.isSum ? 1.1f : 1.5f;
+    const float lw = s.isSum ? lineWidth * 0.75f : lineWidth;
     const auto colour = s.isSum ? ScopeColours::textBright.withAlpha (0.8f) : s.colour;
 
     if ((float) n <= w * 1.5f)
@@ -221,10 +246,10 @@ void WaveformView::drawSeries (Graphics& g, Rectangle<float> lane, const ScopeSe
         if (glowAlpha > 0.0f)
         {
             g.setColour (colour.withAlpha (glowAlpha));
-            g.strokePath (p, PathStrokeType (5.0f, PathStrokeType::curved, PathStrokeType::rounded));
+            g.strokePath (p, PathStrokeType (lw + 3.5f, PathStrokeType::curved, PathStrokeType::rounded));
         }
         g.setColour (colour);
-        g.strokePath (p, PathStrokeType (lineWidth, PathStrokeType::curved, PathStrokeType::rounded));
+        g.strokePath (p, PathStrokeType (lw, PathStrokeType::curved, PathStrokeType::rounded));
         return;
     }
 
@@ -258,15 +283,18 @@ void WaveformView::drawSeries (Graphics& g, Rectangle<float> lane, const ScopeSe
 
     if (! s.isSum)
     {
-        g.setColour (colour.withAlpha (0.26f));
-        g.fillPath (env);
+        if (fill)
+        {
+            g.setColour (colour.withAlpha (0.26f));
+            g.fillPath (env);
+        }
         g.setColour (colour.withAlpha (glowAlpha));
-        g.strokePath (top, PathStrokeType (4.0f));
-        g.strokePath (bottom, PathStrokeType (4.0f));
+        g.strokePath (top, PathStrokeType (lw + 2.7f));
+        g.strokePath (bottom, PathStrokeType (lw + 2.7f));
     }
     g.setColour (colour.withAlpha (0.95f));
-    g.strokePath (top, PathStrokeType (s.isSum ? 1.0f : 1.3f));
-    g.strokePath (bottom, PathStrokeType (s.isSum ? 1.0f : 1.3f));
+    g.strokePath (top, PathStrokeType (lw * 0.87f));
+    g.strokePath (bottom, PathStrokeType (lw * 0.87f));
 }
 
 void WaveformView::drawLane (Graphics& g, Rectangle<float> lane, const std::vector<int>& indices)
@@ -334,7 +362,8 @@ void WaveformView::paint (Graphics& g)
 {
     auto b = getLocalBounds().toFloat();
     drawPanel (g, b);
-    const auto fullArea = b.reduced (10.0f, 8.0f).withTrimmedTop (18.0f);
+    const bool showHeader = ! minimal || hovered;
+    const auto fullArea = minimal ? b.reduced (6.0f, 6.0f) : b.reduced (10.0f, 8.0f).withTrimmedTop (18.0f);
     const auto plotArea = fullArea.withTrimmedLeft (dbAxisWidth);
 
     const int numLanes = jmax (1, (int) lanes.size());
@@ -353,10 +382,22 @@ void WaveformView::paint (Graphics& g)
         g.drawVerticalLine (roundToInt (x), plotArea.getY(), plotArea.getBottom());
     }
 
-    auto header = b.reduced (12.0f, 6.0f).removeFromTop (16.0f);
+    if (! showHeader)
+    {
+        expandIcon = cleanChip = settingsChip = {};
+        return;
+    }
+    auto header = minimal ? Rectangle<float> (fullArea.getX() + dbAxisWidth + 6.0f, fullArea.getY() + 6.0f,
+                                              fullArea.getWidth() - dbAxisWidth - 12.0f, 16.0f)
+                          : b.reduced (12.0f, 6.0f).removeFromTop (16.0f);
+    if (minimal) drawHeaderStrip (g, header);
     expandIcon = header.removeFromRight (16.0f);
-    drawExpandIcon (g, expandIcon, expanded);
+    drawExpandIcon (g, expandIcon, expanded || minimal);
     header.removeFromRight (10.0f);
+    cleanChip = takeChipRight (g, header, minimal ? "SALIR" : "LIMPIO");
+    drawChip (g, cleanChip, minimal ? "SALIR" : "LIMPIO", false);
+    settingsChip = takeChipRight (g, header, "AJUSTES");
+    drawChip (g, settingsChip, "AJUSTES", false);
 
     g.setFont (uiFont (12.0f, true));
     g.setColour (ScopeColours::textBright);
@@ -395,14 +436,40 @@ void WaveformView::paint (Graphics& g)
 
 void WaveformView::mouseDown (const MouseEvent& e)
 {
-    if (expandIcon.expanded (4.0f).contains (e.position) && onExpandToggle)
-        onExpandToggle();
+    const auto p = e.position;
+    if (expandIcon.expanded (4.0f).contains (p))
+    {
+        if (minimal) { if (onToggleClean) onToggleClean(); }
+        else if (onExpandToggle) onExpandToggle();
+    }
+    else if (cleanChip.contains (p))    { if (onToggleClean) onToggleClean(); }
+    else if (settingsChip.contains (p)) { if (onOpenSettings) onOpenSettings(); }
 }
 
 void WaveformView::mouseDoubleClick (const MouseEvent& e)
 {
-    if (! expandIcon.expanded (4.0f).contains (e.position) && onExpandToggle)
-        onExpandToggle();
+    const auto p = e.position;
+    if (expandIcon.expanded (4.0f).contains (p) || cleanChip.contains (p) || settingsChip.contains (p))
+        return;
+    if (minimal) { if (onToggleClean) onToggleClean(); }   // en modo limpio, doble clic = salir
+    else if (onExpandToggle) onExpandToggle();
+}
+
+void WaveformView::mouseMove (const MouseEvent&)
+{
+    if (! hovered) { hovered = true; repaint(); }
+}
+
+void WaveformView::mouseExit (const MouseEvent&)
+{
+    if (hovered) { hovered = false; repaint(); }
+}
+
+void WaveformView::mouseWheelMove (const MouseEvent&, const MouseWheelDetails& wheel)
+{
+    const float delta = wheel.isReversed ? -wheel.deltaY : wheel.deltaY;
+    if (onWheelZoom && std::abs (delta) > 0.0f)
+        onWheelZoom (delta);
 }
 
 //==============================================================================
@@ -711,6 +778,24 @@ SpectrumView::SpectrumView()
     }
 }
 
+void SpectrumView::setSettings (const Settings& newSettings)
+{
+    st = newSettings;
+    st.maxF = jlimit (100.0f, 22000.0f, st.maxF);
+    st.minF = jlimit (10.0f, st.maxF / 2.0f, st.minF);          // al menos una octava
+    st.topDb = jlimit (-60.0f, 24.0f, st.topDb);
+    st.bottomDb = jlimit (-160.0f, st.topDb - 12.0f, st.bottomDb); // al menos 12 dB
+    st.lineWidth = jlimit (0.5f, 5.0f, st.lineWidth);
+
+    // Movimiento: 0.5 = como siempre; hacia 0 sigue más rápido, hacia 1 más lento y suave
+    const float k = std::pow (4.0f, 1.0f - 2.0f * jlimit (0.0f, 1.0f, st.motion));
+    attackCoef  = jmin (1.0f, 0.6f * k);
+    releaseCoef = jmin (1.0f, 0.12f * k);
+    averageCoef = jmin (1.0f, 0.3f * k);
+    spectroImage = {};
+    repaint();
+}
+
 void SpectrumView::setOptions (bool msAvail, bool msEnabled, bool spectrogramEnabled,
                                int newMode, const String& trigName, const String& newStatus)
 {
@@ -757,7 +842,7 @@ void SpectrumView::pushDb (int key, const std::vector<float>& db, Colour colour,
     for (size_t i = 0; i < curve.smoothed.size() && i < db.size(); ++i)
     {
         auto& s = curve.smoothed[i];
-        s = fresh ? db[i] : s + (db[i] - s) * 0.3f;
+        s = fresh ? db[i] : s + (db[i] - s) * averageCoef;
         curve.peaks[i] = jmax (db[i], curve.peaks[i] - 0.35f);
         curve.average[i] = s;   // ya es un promedio: la referencia guarda esto
     }
@@ -776,7 +861,7 @@ void SpectrumView::pushTrack (int key, const float* mono, Colour colour, const S
     {
         const float db = Decibels::gainToDecibels (fftData[i] * windowGain, -120.0f);
         auto& s = curve.smoothed[i];
-        s += (db - s) * (db > s ? 0.6f : 0.12f);
+        s += (db - s) * (db > s ? attackCoef : releaseCoef);
         curve.peaks[i] = jmax (db, curve.peaks[i] - 0.35f);
         curve.average[i] += (db - curve.average[i]) * 0.02f;   // promedio largo (~1 s) para la referencia
     }
@@ -820,12 +905,12 @@ void SpectrumView::pushSpectrogramColumn()
 
     spectroImage.moveImageSection (0, 0, 1, 0, w - 1, h);
     Image::BitmapData bd (spectroImage, w - 1, 0, 1, h, Image::BitmapData::writeOnly);
-    constexpr float floorDb = -84.0f, topDb = 0.0f;
+    const float floorDb = st.bottomDb + 6.0f, topDb = st.topDb - 6.0f;
     for (int y = 0; y < h; ++y)
     {
         const float t0 = 1.0f - (float) (y + 1) / (float) h, t1 = 1.0f - (float) y / (float) h;   // arriba = agudos
-        const float f0 = specMinF * std::pow (specMaxF / specMinF, t0), f1 = specMinF * std::pow (specMaxF / specMinF, t1);
-        const float db = valueAt (bins, f0, f1) + specTilt (std::sqrt (f0 * f1));
+        const float f0 = freqAtFraction (t0), f1 = freqAtFraction (t1);
+        const float db = valueAt (bins, f0, f1) + tiltAt (std::sqrt (f0 * f1));
         const int idx = jlimit (0, 255, roundToInt ((db - floorDb) / (topDb - floorDb) * 255.0f));
         bd.setPixelColour (0, y, lut[(size_t) idx]);
     }
@@ -872,13 +957,20 @@ void SpectrumView::toggleReference()
 bool SpectrumView::hitsHeaderControl (Point<float> p) const
 {
     return expandIcon.expanded (4.0f).contains (p) || msChip.contains (p) || refChip.contains (p)
-        || spectroChip.contains (p) || modeChip.contains (p);
+        || spectroChip.contains (p) || modeChip.contains (p) || cleanChip.contains (p) || settingsChip.contains (p);
 }
 
 void SpectrumView::mouseDown (const MouseEvent& e)
 {
     const auto p = e.position;
-    if (expandIcon.expanded (4.0f).contains (p)) { if (onExpandToggle) onExpandToggle(); return; }
+    if (expandIcon.expanded (4.0f).contains (p))
+    {
+        if (minimal) { if (onToggleClean) onToggleClean(); }
+        else if (onExpandToggle) onExpandToggle();
+        return;
+    }
+    if (cleanChip.contains (p))                  { if (onToggleClean) onToggleClean(); return; }
+    if (settingsChip.contains (p))               { if (onOpenSettings) onOpenSettings(); return; }
     if (msChip.contains (p))                     { if (onToggleMs) onToggleMs(); return; }
     if (modeChip.contains (p))                   { if (onCycleMode) onCycleMode(); return; }
     if (spectroChip.contains (p))                { if (onToggleSpectrogram) onToggleSpectrogram(); return; }
@@ -932,7 +1024,7 @@ float SpectrumView::frequencyAt (Point<float> p) const
     // En el espectro la frecuencia va en horizontal; en la cascada, en vertical
     const float t = spectroOn ? (lastPlot.getBottom() - p.y) / jmax (1.0f, lastPlot.getHeight())
                               : (p.x - lastPlot.getX()) / jmax (1.0f, lastPlot.getWidth());
-    return specMinF * std::pow (specMaxF / specMinF, jlimit (0.0f, 1.0f, t));
+    return freqAtFraction (jlimit (0.0f, 1.0f, t));
 }
 
 void SpectrumView::drawAudition (Graphics& g, Rectangle<float> area)
@@ -943,16 +1035,16 @@ void SpectrumView::drawAudition (Graphics& g, Rectangle<float> area)
     // Franja que se está escuchando (ancho elegido con la rueda)
     const float half = std::pow (2.0f, auditionWidth * 0.5f);
     const float f0 = auditionHz / half, f1 = auditionHz * half;
-    const float span = std::log (specMaxF / specMinF);
+    const float span = std::log (st.maxF / st.minF);
     Rectangle<float> band;
     if (spectroOn)
     {
-        auto yOfF = [&] (float f) { return area.getBottom() - area.getHeight() * std::log (f / specMinF) / span; };
+        auto yOfF = [&] (float f) { return area.getBottom() - area.getHeight() * std::log (f / st.minF) / span; };
         band = Rectangle<float>::leftTopRightBottom (area.getX(), yOfF (f1), area.getRight(), yOfF (f0));
     }
     else
     {
-        auto xOfF = [&] (float f) { return area.getX() + area.getWidth() * std::log (f / specMinF) / span; };
+        auto xOfF = [&] (float f) { return area.getX() + area.getWidth() * std::log (f / st.minF) / span; };
         band = Rectangle<float>::leftTopRightBottom (xOfF (f0), area.getY(), xOfF (f1), area.getBottom());
     }
     band = band.getIntersection (area);
@@ -982,8 +1074,10 @@ void SpectrumView::drawAudition (Graphics& g, Rectangle<float> area)
 
 void SpectrumView::mouseDoubleClick (const MouseEvent& e)
 {
-    if (! hitsHeaderControl (e.position) && onExpandToggle)
-        onExpandToggle();
+    if (hitsHeaderControl (e.position))
+        return;
+    if (minimal) { if (onToggleClean) onToggleClean(); }   // en modo limpio, doble clic = salir
+    else if (onExpandToggle) onExpandToggle();
 }
 
 void SpectrumView::paintSpectrogram (Graphics& g, Rectangle<float> area, Rectangle<float> leftLabels, Rectangle<float> bottomLabels)
@@ -996,10 +1090,11 @@ void SpectrumView::paintSpectrogram (Graphics& g, Rectangle<float> area, Rectang
         g.fillRect (area);
     }
 
-    auto yOfF = [&] (float f) { return area.getBottom() - area.getHeight() * std::log (f / specMinF) / std::log (specMaxF / specMinF); };
+    auto yOfF = [&] (float f) { return area.getBottom() - area.getHeight() * std::log (f / st.minF) / std::log (st.maxF / st.minF); };
     g.setFont (uiFont (10.0f));
-    for (float f : { 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f })
+    for (float f : { 30.f, 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f })
     {
+        if (f <= st.minF * 1.05f || f >= st.maxF / 1.05f) continue;
         const float y = yOfF (f);
         g.setColour (Colours::white.withAlpha (0.07f));
         g.drawHorizontalLine (roundToInt (y), area.getX(), area.getRight());
@@ -1013,7 +1108,7 @@ void SpectrumView::paintSpectrogram (Graphics& g, Rectangle<float> area, Rectang
 
     if (hoverPos.has_value() && area.contains (*hoverPos))
     {
-        const float f = specMinF * std::pow (specMaxF / specMinF, (area.getBottom() - hoverPos->y) / area.getHeight());
+        const float f = freqAtFraction ((area.getBottom() - hoverPos->y) / area.getHeight());
         g.setColour (ScopeColours::textBright.withAlpha (0.5f));
         g.drawHorizontalLine (roundToInt (hoverPos->y), area.getX(), area.getRight());
 
@@ -1034,40 +1129,29 @@ void SpectrumView::paintSpectrogram (Graphics& g, Rectangle<float> area, Rectang
     }
 }
 
-void SpectrumView::paint (Graphics& g)
+void SpectrumView::paintHeader (Graphics& g, Rectangle<float> header)
 {
-    auto b = getLocalBounds().toFloat();
-    drawPanel (g, b);
-
-    auto area = b.reduced (10.0f, 8.0f);
-    auto header = area.removeFromTop (16.0f);
-    area.removeFromTop (4.0f);
-    auto bottomLabels = area.removeFromBottom (14.0f);
-    auto leftLabels = area.removeFromLeft (30.0f);
-    bottomLabels.removeFromLeft (30.0f);
-    lastPlot = area;
-
     expandIcon = header.removeFromRight (16.0f).translated (-2.0f, 0.0f);
-    drawExpandIcon (g, expandIcon, expanded);
+    drawExpandIcon (g, expandIcon, expanded || minimal);
     header.removeFromRight (10.0f);
+
+    // A la derecha: LIMPIO / SALIR y AJUSTES
+    cleanChip = takeChipRight (g, header, minimal ? "SALIR" : "LIMPIO");
+    drawChip (g, cleanChip, minimal ? "SALIR" : "LIMPIO", false);
+    settingsChip = takeChipRight (g, header, "AJUSTES");
+    drawChip (g, settingsChip, "AJUSTES", false);
 
     g.setFont (uiFont (12.0f, true));
     g.setColour (ScopeColours::textBright);
     g.drawText (spectroOn ? "CASCADA" : "ESPECTRO", header.removeFromLeft (78.0f), Justification::centredLeft);
 
-    // Botones del encabezado
     auto chip = [&] (Rectangle<float>& r, const String& text, bool on)
     {
         g.setFont (uiFont (10.0f, true));
         const float w = GlyphArrangement::getStringWidth (g.getCurrentFont(), text) + 16.0f;
         r = header.removeFromLeft (w).reduced (0.0f, 0.5f);
         header.removeFromLeft (6.0f);
-        g.setColour (on ? ScopeColours::left.withAlpha (0.22f) : ScopeColours::panel);
-        g.fillRoundedRectangle (r, 3.0f);
-        g.setColour (on ? ScopeColours::left : ScopeColours::gridStrong);
-        g.drawRoundedRectangle (r, 3.0f, 1.0f);
-        g.setColour (on ? ScopeColours::textBright : ScopeColours::text);
-        g.drawText (text, r, Justification::centred);
+        drawChip (g, r, text, on);
     };
     const bool hasRef = reference != nullptr && ! reference->empty();
     if (! spectroOn)
@@ -1090,13 +1174,11 @@ void SpectrumView::paint (Graphics& g)
         g.setColour (ScopeColours::text);
         if (it != curves.end())
             g.drawText ("muestra: " + it->second.name, header, Justification::centredRight);
-        paintSpectrogram (g, area, leftLabels, bottomLabels);
-        drawAudition (g, area);
         return;
     }
 
     g.setColour (ScopeColours::text);
-    g.drawText (u8 ("4.5 dB/oct"), header, Justification::centredRight);
+    g.drawText (String (st.tilt, st.tilt == std::floor (st.tilt) ? 0 : 1) + " dB/oct", header, Justification::centredRight);
     if (status.isNotEmpty())
     {
         g.setColour (ScopeColours::caution);
@@ -1107,34 +1189,102 @@ void SpectrumView::paint (Graphics& g)
         g.setColour (ScopeColours::warn);
         g.drawText ("rojo = se pisan", header, Justification::centredLeft);
     }
+}
 
-    auto xOf = [&] (float f) { return area.getX() + area.getWidth() * std::log (f / specMinF) / std::log (specMaxF / specMinF); };
-    auto yOf = [&] (float db) { return jmap (jlimit (specBottomDb, specTopDb, db), specTopDb, specBottomDb, area.getY(), area.getBottom()); };
+void SpectrumView::paint (Graphics& g)
+{
+    auto b = getLocalBounds().toFloat();
+    drawPanel (g, b);
 
-    // Grilla
-    g.setFont (uiFont (10.0f));
-    for (float f : { 30.f, 40.f, 60.f, 70.f, 80.f, 90.f, 300.f, 400.f, 600.f, 700.f, 800.f, 900.f, 3000.f, 4000.f, 6000.f, 7000.f, 8000.f, 9000.f })
+    // En modo limpio el gráfico ocupa todo y el encabezado aparece solo con el mouse encima
+    const bool headerOverlay = minimal;
+    const bool showHeader = ! minimal || hoverPos.has_value() || auditioning;
+    auto area = minimal ? b.reduced (6.0f, 6.0f) : b.reduced (10.0f, 8.0f);
+    Rectangle<float> header;
+    if (! headerOverlay)
     {
+        header = area.removeFromTop (16.0f);
+        area.removeFromTop (4.0f);
+    }
+    auto bottomLabels = area.removeFromBottom (14.0f);
+    auto leftLabels = area.removeFromLeft (30.0f);
+    bottomLabels.removeFromLeft (30.0f);
+    lastPlot = area;
+    if (headerOverlay)
+        header = Rectangle<float> (area.getX() + 6.0f, area.getY() + 6.0f, area.getWidth() - 12.0f, 16.0f);
+    const float overlayGap = headerOverlay && showHeader ? 26.0f : 0.0f;   // para no tapar el encabezado
+
+    auto finishHeader = [&]
+    {
+        if (! showHeader)
+        {
+            expandIcon = msChip = refChip = spectroChip = modeChip = cleanChip = settingsChip = {};
+            return;
+        }
+        if (headerOverlay) drawHeaderStrip (g, header);
+        paintHeader (g, header);
+    };
+
+    if (! headerOverlay)
+        finishHeader();
+
+    if (spectroOn)
+    {
+        paintSpectrogram (g, area, leftLabels, bottomLabels);
+        drawAudition (g, area);
+        if (headerOverlay) finishHeader();
+        return;
+    }
+    const bool hasRef = reference != nullptr && ! reference->empty();
+
+    auto xOf = [&] (float f) { return area.getX() + area.getWidth() * std::log (f / st.minF) / std::log (st.maxF / st.minF); };
+    auto yOf = [&] (float db) { return jmap (jlimit (st.bottomDb, st.topDb, db), st.topDb, st.bottomDb, area.getY(), area.getBottom()); };
+
+    // Grilla (se adapta al rango elegido)
+    g.setFont (uiFont (10.0f));
+    const bool narrow = st.maxF / st.minF < 80.0f;   // pocas décadas: rotular también 30, 40, 300…
+    auto inRange = [&] (float f) { return f >= st.minF * 0.999f && f <= st.maxF * 1.001f; };
+    for (float f : { 25.f, 30.f, 40.f, 60.f, 70.f, 80.f, 90.f, 150.f, 300.f, 400.f, 600.f, 700.f, 800.f, 900.f, 1500.f,
+                     3000.f, 4000.f, 6000.f, 7000.f, 8000.f, 9000.f, 15000.f })
+    {
+        if (! inRange (f)) continue;
         g.setColour (ScopeColours::grid.withAlpha (0.6f));
         g.drawVerticalLine (roundToInt (xOf (f)), area.getY(), area.getBottom());
     }
-    for (float f : { 20.f, 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f, 20000.f })
+    std::vector<float> labelled { 20.f, 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f, 20000.f };
+    if (narrow)
+        for (float f : { 30.f, 40.f, 60.f, 80.f, 150.f, 300.f, 400.f, 600.f, 800.f, 1500.f, 3000.f, 4000.f, 6000.f, 8000.f, 15000.f })
+            labelled.push_back (f);
+    std::sort (labelled.begin(), labelled.end());
+    float lastRight = -1000.0f;
+    for (float f : labelled)
     {
+        if (! inRange (f)) continue;
         const float x = xOf (f);
         g.setColour (ScopeColours::grid);
         g.drawVerticalLine (roundToInt (x), area.getY(), area.getBottom());
+        const String label = f >= 1000.0f ? String (f / 1000.0f, f < 10000.0f && f != std::floor (f / 1000.0f) * 1000.0f ? 1 : 0) + "k"
+                                          : String ((int) f);
+        const float lw = GlyphArrangement::getStringWidth (g.getCurrentFont(), label) + 4.0f;
+        auto lr = Rectangle<float> (lw, bottomLabels.getHeight()).withCentre ({ x, bottomLabels.getCentreY() });
+        if (lr.getX() < bottomLabels.getX() - 30.0f) lr.setX (bottomLabels.getX() - 30.0f);
+        if (lr.getRight() > bottomLabels.getRight()) lr.setX (bottomLabels.getRight() - lw);
+        if (lr.getX() < lastRight + 4.0f) continue;   // no encimar rótulos
         g.setColour (ScopeColours::text);
-        const String label = f >= 1000.0f ? String (f / 1000.0f, 0) + "k" : String ((int) f);
-        auto just = f <= 20.0f ? Justification::centredLeft : (f >= 20000.0f ? Justification::centredRight : Justification::centred);
-        auto lr = Rectangle<float> (36.0f, bottomLabels.getHeight()).withCentre ({ x, bottomLabels.getCentreY() });
-        if (f <= 20.0f) lr.setX (x);
-        if (f >= 20000.0f) lr.setRight (x);
-        g.drawText (label, lr, just);
+        g.drawText (label, lr.expanded (4.0f, 0.0f), Justification::centred, false);
+        lastRight = lr.getRight();
     }
-    const float dbStep = area.getHeight() > 360.0f ? 6.0f : 12.0f;
-    for (float db = 0.0f; db >= specBottomDb + 1.0f; db -= dbStep)
+    const float range = st.topDb - st.bottomDb;
+    float dbStep = 3.0f;
+    for (float step : { 3.0f, 6.0f, 12.0f, 24.0f })
+    {
+        dbStep = step;
+        if (area.getHeight() / (range / step) >= 32.0f) break;
+    }
+    for (float db = std::floor (st.topDb / dbStep) * dbStep; db >= st.bottomDb + 1.0f; db -= dbStep)
     {
         const float y = yOf (db);
+        if (y < area.getY() + 4.0f) continue;
         g.setColour (std::abs (db) < 0.5f ? ScopeColours::gridStrong : ScopeColours::grid);
         g.drawHorizontalLine (roundToInt (y), area.getX(), area.getRight());
         g.setColour (ScopeColours::text);
@@ -1142,7 +1292,11 @@ void SpectrumView::paint (Graphics& g)
     }
 
     if (order.empty())
+    {
+        drawAudition (g, area);
+        if (headerOverlay) finishHeader();
         return;
+    }
 
     // Valores por columna de píxel
     const int cols = jmax (2, (int) area.getWidth());
@@ -1152,8 +1306,8 @@ void SpectrumView::paint (Graphics& g)
     for (int c = 0; c < cols; ++c)
     {
         const float t0 = (float) c / (float) cols, t1 = (float) (c + 1) / (float) cols;
-        const float f0 = specMinF * std::pow (specMaxF / specMinF, t0), f1 = specMinF * std::pow (specMaxF / specMinF, t1);
-        const float tl = specTilt (std::sqrt (f0 * f1));
+        const float f0 = freqAtFraction (t0), f1 = freqAtFraction (t1);
+        const float tl = tiltAt (std::sqrt (f0 * f1));
         for (size_t k = 0; k < order.size(); ++k)
         {
             const auto& curve = curves.at (order[k]);
@@ -1245,36 +1399,42 @@ void SpectrumView::paint (Graphics& g)
             if (curve.isSum)
             {
                 g.setColour (ScopeColours::bg.withAlpha (0.6f));
-                g.strokePath (line, PathStrokeType (3.5f));
+                g.strokePath (line, PathStrokeType (st.lineWidth + 2.0f));
                 g.setColour (ScopeColours::textBright);
-                g.strokePath (line, PathStrokeType (1.6f));
+                g.strokePath (line, PathStrokeType (st.lineWidth + 0.1f));
                 continue;
             }
 
             if (numTracks > 1)
             {
-                g.setColour (curve.colour.withAlpha (0.07f));
-                g.fillPath (fill);
+                if (st.fill)
+                {
+                    g.setColour (curve.colour.withAlpha (0.07f));
+                    g.fillPath (fill);
+                }
             }
             else
             {
-                g.setGradientFill (ColourGradient (curve.colour.withAlpha (0.42f), 0.0f, area.getY(),
-                                                   curve.colour.withAlpha (0.02f), 0.0f, area.getBottom(), false));
-                g.fillPath (fill);
+                if (st.fill)
+                {
+                    g.setGradientFill (ColourGradient (curve.colour.withAlpha (0.42f), 0.0f, area.getY(),
+                                                       curve.colour.withAlpha (0.02f), 0.0f, area.getBottom(), false));
+                    g.fillPath (fill);
+                }
                 g.setColour (ScopeColours::textBright.withAlpha (0.28f));
                 g.strokePath (peakLine, PathStrokeType (1.0f));
             }
             g.setColour (curve.colour.withAlpha (0.18f));
-            g.strokePath (line, PathStrokeType (4.0f));
+            g.strokePath (line, PathStrokeType (st.lineWidth + 2.5f));
             g.setColour (curve.colour);
-            g.strokePath (line, PathStrokeType (1.5f));
+            g.strokePath (line, PathStrokeType (st.lineWidth));
         }
     }
     g.restoreState();
 
     // Leyenda de la suma / referencia
     {
-        auto legend = area.reduced (8.0f, 4.0f).removeFromTop (14.0f);
+        auto legend = area.reduced (8.0f, 4.0f).withTrimmedTop (overlayGap).removeFromTop (14.0f);
         g.setFont (uiFont (10.0f, true));
         bool anySum = false;
         for (auto key : order) anySum = anySum || curves.at (key).isSum;
@@ -1288,7 +1448,7 @@ void SpectrumView::paint (Graphics& g)
         {
             g.setColour (ScopeColours::textBright.withAlpha (0.7f));
             const String nm = referenceName != nullptr && referenceName->isNotEmpty() ? *referenceName : String ("guardada");
-            g.drawText (u8 ("- - referencia: ") + nm, area.reduced (8.0f, 4.0f).withTrimmedTop (anySum ? 14.0f : 0.0f).removeFromTop (14.0f),
+            g.drawText (u8 ("- - referencia: ") + nm, area.reduced (8.0f, 4.0f).withTrimmedTop (overlayGap + (anySum ? 14.0f : 0.0f)).removeFromTop (14.0f),
                         Justification::topRight);
         }
     }
@@ -1297,7 +1457,7 @@ void SpectrumView::paint (Graphics& g)
     if (hoverPos.has_value() && area.contains (*hoverPos))
     {
         const float x = hoverPos->x;
-        const float f = specMinF * std::pow (specMaxF / specMinF, (x - area.getX()) / area.getWidth());
+        const float f = freqAtFraction ((x - area.getX()) / area.getWidth());
 
         g.setColour (ScopeColours::textBright.withAlpha (0.45f));
         g.drawVerticalLine (roundToInt (x), area.getY(), area.getBottom());
@@ -1309,7 +1469,7 @@ void SpectrumView::paint (Graphics& g)
         for (auto key : order)
         {
             const auto& curve = curves.at (key);
-            const float v = valueAt (curve.smoothed, f / 1.02f, f * 1.02f) + specTilt (f);
+            const float v = valueAt (curve.smoothed, f / 1.02f, f * 1.02f) + tiltAt (f);
             const auto col = curve.isSum ? ScopeColours::textBright : curve.colour;
             items.push_back ({ curve.name, col, v });
             g.setColour (col);
@@ -1318,13 +1478,13 @@ void SpectrumView::paint (Graphics& g)
             g.drawEllipse (Rectangle<float> (7.0f, 7.0f).withCentre ({ x, yOf (v) }), 1.0f);
         }
         if (hasRef)
-            items.push_back ({ "Referencia", ScopeColours::textBright.withAlpha (0.6f), valueAt (*reference, f / 1.02f, f * 1.02f) + specTilt (f) });
+            items.push_back ({ "Referencia", ScopeColours::textBright.withAlpha (0.6f), valueAt (*reference, f / 1.02f, f * 1.02f) + tiltAt (f) });
 
         const bool named = items.size() > 1;
         const float lineH = 15.0f;
         const float boxW = named ? 230.0f : 230.0f;
         const float boxH = 10.0f + lineH * (3.0f + (float) items.size());
-        auto box = Rectangle<float> (x + 12.0f, area.getY() + 6.0f, boxW, boxH);
+        auto box = Rectangle<float> (x + 12.0f, area.getY() + 6.0f + overlayGap, boxW, boxH);
         if (box.getRight() > area.getRight()) box.setX (x - 12.0f - boxW);
 
         g.setColour (ScopeColours::bg.withAlpha (0.92f));
@@ -1360,6 +1520,151 @@ void SpectrumView::paint (Graphics& g)
     }
 
     drawAudition (g, area);
+    if (headerOverlay) finishHeader();
+}
+
+//==============================================================================
+namespace
+{
+    // Panel de AJUSTES del gráfico: cada fila guarda su valor en el estado de la ventana (se guarda con el Set)
+    class SettingsPanel : public Component
+    {
+    public:
+        struct Row
+        {
+            String label;
+            Identifier id;                    // propiedad en el estado de la ventana
+            double min = 0, max = 1, def = 0, step = 0, centre = 0;   // centre > 0: escala logarítmica
+            std::function<String (double)> fmt;
+            bool toggle = false;
+            String paramId;                   // si no está vacío, la fila maneja un parámetro del plugin
+        };
+
+        SettingsPanel (const String& titleText, std::function<ValueTree()> getState, std::vector<Row> newRows,
+                       AudioProcessorValueTreeState& apvtsRef, std::function<void()> changed, std::function<void()> close)
+            : title (titleText), state (std::move (getState)), rows (std::move (newRows)), apvts (apvtsRef),
+              onChange (std::move (changed)), onClose (std::move (close))
+        {
+            closeButton.setButtonText (u8 ("×"));
+            closeButton.onClick = [this] { if (onClose) onClose(); };
+            addAndMakeVisible (closeButton);
+            resetButton.setButtonText ("Restablecer");
+            resetButton.onClick = [this] { resetAll(); };
+            addAndMakeVisible (resetButton);
+
+            for (auto& r : rows)
+            {
+                auto* label = labels.add (new Label ({}, r.label));
+                label->setFont (uiFont (11.0f, true));
+                label->setColour (Label::textColourId, ScopeColours::text);
+                addAndMakeVisible (label);
+
+                if (r.toggle)
+                {
+                    auto* t = toggles.add (new ToggleButton());
+                    t->setToggleState ((bool) state().getProperty (r.id, r.def > 0.5), dontSendNotification);
+                    t->setColour (ToggleButton::tickColourId, ScopeColours::left);
+                    t->setColour (ToggleButton::tickDisabledColourId, ScopeColours::text);
+                    const auto id = r.id;
+                    t->onClick = [this, t, id] { state().setProperty (id, t->getToggleState(), nullptr); if (onChange) onChange(); };
+                    addAndMakeVisible (t);
+                    sliders.add (nullptr);
+                    continue;
+                }
+
+                toggles.add (nullptr);
+                auto* sl = sliders.add (new Slider (Slider::LinearHorizontal, Slider::TextBoxRight));
+                sl->setTextBoxStyle (Slider::TextBoxRight, false, 66, 20);
+                if (r.paramId.isNotEmpty())
+                {
+                    attachments.add (new AudioProcessorValueTreeState::SliderAttachment (apvts, r.paramId, *sl));
+                }
+                else
+                {
+                    NormalisableRange<double> range (r.min, r.max, r.step);
+                    if (r.centre > 0) range.setSkewForCentre (r.centre);
+                    sl->setNormalisableRange (range);
+                    sl->setDoubleClickReturnValue (true, r.def);
+                    auto fmt = r.fmt;
+                    sl->textFromValueFunction = [fmt] (double v) { return fmt ? fmt (v) : String (v, 1); };
+                    sl->valueFromTextFunction = [] (const String& t)
+                    {
+                        const auto low = t.trim().toLowerCase();
+                        const double v = low.getDoubleValue();
+                        return low.contains ("k") ? v * 1000.0 : v;
+                    };
+                    sl->setValue ((double) state().getProperty (r.id, r.def), dontSendNotification);
+                    sl->updateText();
+                    const auto id = r.id;
+                    sl->onValueChange = [this, sl, id] { state().setProperty (id, sl->getValue(), nullptr); if (onChange) onChange(); };
+                }
+                addAndMakeVisible (sl);
+            }
+            setSize (330, 40 + (int) rows.size() * 30 + 40);
+        }
+
+        void paint (Graphics& g) override
+        {
+            auto b = getLocalBounds().toFloat();
+            g.setColour (Colours::black.withAlpha (0.35f));
+            g.fillRoundedRectangle (b.translated (0.0f, 3.0f), 8.0f);
+            g.setColour (ScopeColours::bg.withAlpha (0.97f));
+            g.fillRoundedRectangle (b.reduced (0.5f), 8.0f);
+            g.setColour (ScopeColours::gridStrong);
+            g.drawRoundedRectangle (b.reduced (0.5f), 8.0f, 1.0f);
+            g.setColour (ScopeColours::textBright);
+            g.setFont (uiFont (12.0f, true));
+            g.drawText (title, Rectangle<int> (14, 8, getWidth() - 50, 22), Justification::centredLeft);
+        }
+
+        void resized() override
+        {
+            closeButton.setBounds (getWidth() - 34, 8, 24, 22);
+            auto area = getLocalBounds().reduced (14, 0).withTrimmedTop (38);
+            for (int i = 0; i < (int) rows.size(); ++i)
+            {
+                auto row = area.removeFromTop (30);
+                labels[i]->setBounds (row.removeFromLeft (112));
+                if (toggles[i] != nullptr) toggles[i]->setBounds (row.withWidth (40));
+                else                       sliders[i]->setBounds (row.reduced (0, 3));
+            }
+            resetButton.setBounds (area.removeFromTop (34).withTrimmedTop (8).removeFromRight (110));
+        }
+
+    private:
+        void resetAll()
+        {
+            for (int i = 0; i < (int) rows.size(); ++i)
+            {
+                const auto& r = rows[(size_t) i];
+                if (r.paramId.isNotEmpty())
+                {
+                    if (auto* param = apvts.getParameter (r.paramId))
+                    {
+                        param->beginChangeGesture();
+                        param->setValueNotifyingHost (param->getDefaultValue());
+                        param->endChangeGesture();
+                    }
+                    continue;
+                }
+                state().removeProperty (r.id, nullptr);
+                if (toggles[i] != nullptr) toggles[i]->setToggleState (r.def > 0.5, dontSendNotification);
+                if (sliders[i] != nullptr) sliders[i]->setValue (r.def, dontSendNotification);
+            }
+            if (onChange) onChange();
+        }
+
+        String title;
+        std::function<ValueTree()> state;
+        std::vector<Row> rows;
+        AudioProcessorValueTreeState& apvts;
+        std::function<void()> onChange, onClose;
+        TextButton closeButton, resetButton;
+        OwnedArray<Label> labels;
+        OwnedArray<Slider> sliders;
+        OwnedArray<ToggleButton> toggles;
+        OwnedArray<AudioProcessorValueTreeState::SliderAttachment> attachments;
+    };
 }
 
 //==============================================================================
@@ -1420,6 +1725,20 @@ ScopeLabAudioProcessorEditor::ScopeLabAudioProcessorEditor (ScopeLabAudioProcess
 
     wave.onExpandToggle     = [this] { setFocusPanel (focusPanel == 1 ? 0 : 1); };
     spectrum.onExpandToggle = [this] { setFocusPanel (focusPanel == 2 ? 0 : 2); };
+    wave.onToggleClean      = [this] { setCleanMode (! cleanMode, 1); };
+    spectrum.onToggleClean  = [this] { setCleanMode (! cleanMode, 2); };
+    wave.onOpenSettings     = [this] { toggleSettings (1); };
+    spectrum.onOpenSettings = [this] { toggleSettings (2); };
+    wave.onWheelZoom = [this] (float steps)
+    {
+        if (auto* param = proc.apvts.getParameter ("gain"))
+        {
+            const float db = jlimit (-24.0f, 24.0f, gainParam->load() + steps * 12.0f);
+            param->beginChangeGesture();
+            param->setValueNotifyingHost (param->convertTo0to1 (db));
+            param->endChangeGesture();
+        }
+    };
 
     trackBar.onToggle = [this] (int key)
     {
@@ -1468,9 +1787,23 @@ ScopeLabAudioProcessorEditor::ScopeLabAudioProcessorEditor (ScopeLabAudioProcess
     splitAtt  = std::make_unique<ButtonAttachment>   (proc.apvts, "split",  splitButton);
     freezeAtt = std::make_unique<ButtonAttachment>   (proc.apvts, "freeze", freezeButton);
 
+    // Restaurar ajustes, modo y tamaño de la ventana guardados con el Set
     setResizable (true, true);
-    setResizeLimits (900, 540, 2400, 1500);
-    setSize (1040, 660);
+    {
+        auto u = uiState();
+        applyViewSettings();
+        focusPanel = jlimit (0, 2, (int) u.getProperty ("focus", 0));
+        cleanMode = (bool) u.getProperty ("clean", false);
+        if (cleanMode && focusPanel == 0) focusPanel = 2;
+        wave.setExpanded (focusPanel == 1);
+        spectrum.setExpanded (focusPanel == 2);
+        wave.setMinimal (cleanMode && focusPanel == 1);
+        spectrum.setMinimal (cleanMode && focusPanel == 2);
+        applySizeLimits();
+        setSize ((int) u.getProperty (cleanMode ? "cleanW" : "normalW", cleanMode ? 900 : 1040),
+                 (int) u.getProperty (cleanMode ? "cleanH" : "normalH", cleanMode ? 420 : 660));
+    }
+    restoringSize = false;
 
     startTimerHz (60);
 }
@@ -1482,8 +1815,146 @@ ScopeLabAudioProcessorEditor::~ScopeLabAudioProcessorEditor()
     setLookAndFeel (nullptr);
 }
 
+ValueTree ScopeLabAudioProcessorEditor::uiState()
+{
+    return proc.apvts.state.getOrCreateChildWithName ("UI", nullptr);
+}
+
+void ScopeLabAudioProcessorEditor::applyViewSettings()
+{
+    auto u = uiState();
+    SpectrumView::Settings s;
+    s.topDb     = (float) (double) u.getProperty ("specTop", s.topDb);
+    s.bottomDb  = (float) (double) u.getProperty ("specBottom", s.bottomDb);
+    s.minF      = (float) (double) u.getProperty ("specMinF", s.minF);
+    s.maxF      = (float) (double) u.getProperty ("specMaxF", s.maxF);
+    s.tilt      = (float) (double) u.getProperty ("specTilt", s.tilt);
+    s.motion    = (float) (double) u.getProperty ("specMotion", s.motion);
+    s.lineWidth = (float) (double) u.getProperty ("specLine", s.lineWidth);
+    s.fill      = (bool) u.getProperty ("specFill", s.fill);
+    spectrum.setSettings (s);
+    wave.setStyle ((float) (double) u.getProperty ("waveLine", 1.5), (bool) u.getProperty ("waveFill", true));
+}
+
+void ScopeLabAudioProcessorEditor::applySizeLimits()
+{
+    if (cleanMode) setResizeLimits (240, 120, 5120, 2880);   // modo limpio: cualquier tamaño
+    else           setResizeLimits (900, 540, 5120, 2880);
+}
+
+void ScopeLabAudioProcessorEditor::setCleanMode (bool on, int panel)
+{
+    if (on) focusPanel = jlimit (1, 2, panel);
+    cleanMode = on;
+    wave.setExpanded (focusPanel == 1);
+    spectrum.setExpanded (focusPanel == 2);
+    wave.setMinimal (on && focusPanel == 1);
+    spectrum.setMinimal (on && focusPanel == 2);
+
+    auto u = uiState();
+    u.setProperty ("clean", on, nullptr);
+    u.setProperty ("focus", focusPanel, nullptr);
+
+    restoringSize = true;
+    applySizeLimits();
+    setSize ((int) u.getProperty (on ? "cleanW" : "normalW", on ? 900 : 1040),
+             (int) u.getProperty (on ? "cleanH" : "normalH", on ? 420 : 660));
+    restoringSize = false;
+    resized();
+    refresh();
+    repaint();
+}
+
+void ScopeLabAudioProcessorEditor::toggleSettings (int panel)
+{
+    if (settingsPanel != nullptr && settingsFor == panel)
+    {
+        settingsPanel.reset();
+        settingsFor = 0;
+        return;
+    }
+    settingsPanel.reset();
+    settingsFor = panel;
+    applyViewSettings();
+
+    using Row = SettingsPanel::Row;
+    auto hz = [] (double v) { return v >= 1000.0 ? String (v / 1000.0, v < 10000.0 ? 2 : 1) + " kHz" : String (roundToInt (v)) + " Hz"; };
+    auto db = [] (double v) { return (v > 0 ? "+" : "") + String (roundToInt (v)) + " dB"; };
+    auto px = [] (double v) { return String (v, 1) + " px"; };
+    std::vector<Row> rows;
+    String title;
+    if (panel == 2)
+    {
+        title = "AJUSTES DEL ESPECTRO";
+        rows.push_back ({ u8 ("dB arriba"), "specTop", -60, 24, 6, 1, 0, db });
+        rows.push_back ({ u8 ("dB abajo"), "specBottom", -160, -20, -90, 1, 0, db });
+        rows.push_back ({ u8 ("Frecuencia mín."), "specMinF", 10, 2000, 20, 1, 100, hz });
+        rows.push_back ({ u8 ("Frecuencia máx."), "specMaxF", 200, 22000, 20000, 10, 2000, hz });
+        rows.push_back ({ u8 ("Inclinación"), "specTilt", 0, 6, 4.5, 0.5, 0, [] (double v) { return String (v, 1) + " dB/oct"; } });
+        rows.push_back ({ u8 ("Movimiento"), "specMotion", 0, 1, 0.5, 0.05, 0,
+                          [] (double v) { return v < 0.2 ? String ("Rápido") : v < 0.4 ? String ("Ágil") : v <= 0.6 ? String ("Normal") : v <= 0.8 ? String ("Suave") : String ("Lento"); } });
+        rows.push_back ({ u8 ("Grosor de línea"), "specLine", 0.5, 5, 1.5, 0.1, 0, px });
+        Row fillRow { "Relleno", "specFill", 0, 1, 1 }; fillRow.toggle = true;
+        rows.push_back (fillRow);
+    }
+    else
+    {
+        title = u8 ("AJUSTES DEL OSCILOSCOPIO");
+        Row zoom { "Zoom vertical", "gain" }; zoom.paramId = "gain";
+        rows.push_back (zoom);
+        rows.push_back ({ u8 ("Grosor de línea"), "waveLine", 0.5, 5, 1.5, 0.1, 0, px });
+        Row fillRow { "Relleno", "waveFill", 0, 1, 1 }; fillRow.toggle = true;
+        rows.push_back (fillRow);
+    }
+
+    settingsPanel = std::make_unique<SettingsPanel> (title, [this] { return uiState(); }, rows, proc.apvts,
+                                                     [this] { applyViewSettings(); },
+                                                     [this] { MessageManager::callAsync ([sp = Component::SafePointer<ScopeLabAudioProcessorEditor> (this)]
+                                                              { if (sp != nullptr) { sp->settingsPanel.reset(); sp->settingsFor = 0; } }); });
+    addAndMakeVisible (*settingsPanel);
+    layoutSettingsPanel();
+}
+
+void ScopeLabAudioProcessorEditor::layoutSettingsPanel()
+{
+    if (settingsPanel == nullptr)
+        return;
+    const auto target = (settingsFor == 1 ? static_cast<Component&> (wave) : static_cast<Component&> (spectrum)).getBounds();
+    const int w = jmin (settingsPanel->getWidth(), getWidth() - 8);
+    const int h = jmin (settingsPanel->getHeight(), getHeight() - 8);
+    int x = target.getRight() - w - 10, y = target.getY() + 30;
+    x = jlimit (4, jmax (4, getWidth() - w - 4), x);
+    y = jlimit (4, jmax (4, getHeight() - h - 4), y);
+    settingsPanel->setBounds (x, y, w, h);
+    settingsPanel->toFront (false);
+}
+
 void ScopeLabAudioProcessorEditor::resized()
 {
+    for (auto* c : std::initializer_list<Component*> { &trackBar, &viewLabel, &syncLabel, &timeLabel, &beatsLabel, &gainLabel,
+                                                      &viewBox, &syncBox, &beatsBox, &timeSlider, &gainSlider, &splitButton, &freezeButton })
+        c->setVisible (! cleanMode);
+
+    if (! restoringSize)
+    {
+        auto u = uiState();
+        u.setProperty (cleanMode ? "cleanW" : "normalW", getWidth(), nullptr);
+        u.setProperty (cleanMode ? "cleanH" : "normalH", getHeight(), nullptr);
+    }
+
+    if (cleanMode)
+    {
+        // Solo el gráfico elegido, ocupando toda la ventana
+        headerArea = controlsArea = loudnessArea = {};
+        gonio.setVisible (false);
+        phase.setVisible (false);
+        wave.setVisible (focusPanel == 1);
+        spectrum.setVisible (focusPanel == 2);
+        (focusPanel == 1 ? static_cast<Component&> (wave) : static_cast<Component&> (spectrum)).setBounds (getLocalBounds());
+        layoutSettingsPanel();
+        return;
+    }
+
     auto b = getLocalBounds().reduced (10);
     headerArea = b.removeFromTop (38);
     trackBar.setBounds (b.removeFromTop (26));
@@ -1531,11 +2002,13 @@ void ScopeLabAudioProcessorEditor::resized()
     freezeButton.setBounds (buttons.removeFromRight (96));
     buttons.removeFromRight (8);
     splitButton.setBounds (buttons.removeFromRight (100));
+    layoutSettingsPanel();
 }
 
 void ScopeLabAudioProcessorEditor::setFocusPanel (int panel)
 {
     focusPanel = jlimit (0, 2, panel);
+    uiState().setProperty ("focus", focusPanel, nullptr);
     wave.setExpanded (focusPanel == 1);
     spectrum.setExpanded (focusPanel == 2);
     resized();
@@ -1583,13 +2056,20 @@ void ScopeLabAudioProcessorEditor::drawMeter (Graphics& g, Rectangle<float> r, f
 void ScopeLabAudioProcessorEditor::paint (Graphics& g)
 {
     g.fillAll (ScopeColours::bg);
+    if (cleanMode)
+        return;
 
     auto h = headerArea.toFloat();
+    auto title = h.removeFromLeft (120.0f);
+    auto titleTop = title.removeFromTop (25.0f);
     g.setColour (ScopeColours::textBright);
     g.setFont (uiFont (20.0f, true));
-    g.drawText ("SCOPE", h.removeFromLeft (68.0f), Justification::centredLeft);
+    g.drawText ("SCOPE", titleTop.removeFromLeft (68.0f), Justification::bottomLeft);
     g.setColour (ScopeColours::left);
-    g.drawText ("LAB", h.removeFromLeft (52.0f), Justification::centredLeft);
+    g.drawText ("LAB", titleTop.removeFromLeft (52.0f), Justification::bottomLeft);
+    g.setColour (ScopeColours::text);
+    g.setFont (uiFont (10.0f));
+    g.drawText ("by Lucas Campo", title.withTrimmedLeft (1.0f), Justification::topLeft);
     h.removeFromLeft (14.0f);
     loudnessArea = h.removeFromLeft (390.0f).toNearestInt();
     drawLoudness (g, loudnessArea.toFloat());

@@ -1,6 +1,10 @@
 ![ScopeLab](docs/14_golpes_kick.png)
 
+![Modo limpio](docs/18_limpio_espectro.png)
+
 # ScopeLab
+
+*by Lucas Campo*
 
 Analizador visual en formato VST3 y AU: osciloscopio, goniómetro estéreo y analizador de espectro, con **modo multipista** para comparar varias pistas y ver si se pisan. El audio pasa sin modificarse.
 
@@ -37,6 +41,10 @@ Para que se alineen, el DAW tiene que estar en Play. En Ableton los nombres y co
 - **Modos del espectro** (botón a la izquierda de GUARDAR REF): *INSTANTE* (lo último que sonó), *PROMEDIO* (promedio sobre la duración elegida, ideal para comparar) y *GOLPES* (solo lo que suena justo cuando pega la pista de referencia, por ejemplo el kick).
 - **Referencia del panel de fase**: clic en una pista del panel para compararlas todas contra ella (también define la pista que dispara el modo GOLPES). Mide sobre la duración elegida y muestra qué porcentaje del tiempo suenan juntas.
 - **Escuchar una banda** (como en SPAN Plus): mantené apretado el clic sobre el espectro para escuchar solo esa franja; arrastrá para moverla, usá la **rueda del mouse** para hacerla más angosta o más ancha (0,1 a 4 octavas) y soltá para volver al audio normal. En *Esta pista* se filtra esa pista; en *Multipista*, todas las pistas visibles con ScopeLab. El osciloscopio y los medidores siguen mostrando el audio completo.
+- **Modo LIMPIO** (ideal para un monitor aparte): el botón LIMPIO del osciloscopio o del espectro deja solo ese gráfico, ocupando toda la ventana, sin barras ni medidores. Agrandá la ventana desde la esquina al tamaño y la proporción que quieras (desde 240 × 120 hasta 5120 × 2880). Los botones aparecen al pasar el mouse por encima; SALIR o un doble clic vuelven a la vista normal.
+- **AJUSTES del espectro**: dB arriba y abajo, frecuencia mínima y máxima (por ejemplo 20–500 Hz para mirar solo graves), inclinación (0 a 6 dB/oct), movimiento (rápido a lento), grosor de línea y relleno. **Restablecer** vuelve a los valores de fábrica.
+- **AJUSTES del osciloscopio**: zoom vertical, grosor de línea y relleno. La rueda del mouse sobre la onda también cambia el zoom vertical.
+- Cada instancia **recuerda con el Set** su tamaño de ventana (uno para la vista normal y otro para el modo limpio), el modo y los ajustes.
 - **GUARDAR REF**: congela la curva actual como referencia punteada, para comparar.
 - **CASCADA**: espectrograma que muestra cómo cambia el espectro en el tiempo.
 - Medidores de pico, **zoom vertical** y botón **Congelar**.

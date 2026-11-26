@@ -52,15 +52,22 @@ public:
     void setData (std::vector<ScopeSeries> newSeries, std::vector<std::vector<int>> newLanes, float gain,
                   int divisions, const juce::String& divLabel, float sweep, const juce::String& status, bool showLRLegend);
     void setExpanded (bool e) { expanded = e; repaint(); }
+    void setMinimal (bool m) { minimal = m; repaint(); }       // modo limpio: solo la onda
+    void setStyle (float newLineWidth, bool newFill) { lineWidth = newLineWidth; fill = newFill; repaint(); }
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
-    std::function<void()> onExpandToggle;
+    std::function<void()> onExpandToggle, onToggleClean, onOpenSettings;
+    std::function<void (float steps)> onWheelZoom;   // rueda = zoom vertical
 
 private:
-    juce::Rectangle<float> expandIcon;
-    bool expanded = false, showLegend = true;
+    juce::Rectangle<float> expandIcon, cleanChip, settingsChip;
+    bool expanded = false, showLegend = true, minimal = false, hovered = false, fill = true;
+    float lineWidth = 1.5f;
     void drawLane (juce::Graphics&, juce::Rectangle<float> lane, const std::vector<int>& indices);
     void drawSeries (juce::Graphics&, juce::Rectangle<float> lane, const ScopeSeries&);
 
@@ -146,7 +153,21 @@ public:
     static constexpr int fftOrder = 12;
     static constexpr int fftSize  = 1 << fftOrder;
 
+    // Ajustes del gráfico (se guardan con el Set)
+    struct Settings
+    {
+        float topDb = 6.0f, bottomDb = -90.0f;     // rango vertical
+        float minF = 20.0f, maxF = 20000.0f;       // rango de frecuencias
+        float tilt = 4.5f;                         // inclinación, dB por octava
+        float motion = 0.5f;                       // 0 = rápido, 1 = lento
+        float lineWidth = 1.5f;
+        bool fill = true;
+    };
+
     SpectrumView();
+    void setSettings (const Settings&);
+    const Settings& getSettings() const noexcept { return st; }
+    void setMinimal (bool m) { minimal = m; repaint(); }
     void beginFrame (double sampleRate, bool showCollisions);
     void pushTrack (int key, const float* mono, juce::Colour colour, const juce::String& name, bool isSum = false);   // fftSize muestras
     void endFrame();
@@ -175,7 +196,7 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
-    std::function<void()> onExpandToggle, onToggleMs, onToggleSpectrogram, onCycleMode;
+    std::function<void()> onExpandToggle, onToggleMs, onToggleSpectrogram, onCycleMode, onToggleClean, onOpenSettings;
 
 private:
     struct Curve
@@ -187,6 +208,10 @@ private:
     };
 
     float valueAt (const std::vector<float>& bins, float f0, float f1) const;
+    float tiltAt (float f) const noexcept { return st.tilt * std::log2 (f / 1000.0f); }
+    float freqAtFraction (float t) const noexcept { return st.minF * std::pow (st.maxF / st.minF, t); }
+    float fractionOfFreq (float f) const noexcept { return std::log (f / st.minF) / std::log (st.maxF / st.minF); }
+    void paintHeader (juce::Graphics&, juce::Rectangle<float> header);
     int mainCurveKey() const;
     void pushSpectrogramColumn();
     void paintSpectrogram (juce::Graphics&, juce::Rectangle<float> area, juce::Rectangle<float> leftLabels, juce::Rectangle<float> bottomLabels);
@@ -199,7 +224,10 @@ private:
     void drawAudition (juce::Graphics&, juce::Rectangle<float> area);
     Curve& curveFor (int key, juce::Colour colour, const juce::String& name, bool isSum);
 
-    juce::Rectangle<float> expandIcon, msChip, refChip, spectroChip, modeChip, lastPlot;
+    juce::Rectangle<float> expandIcon, msChip, refChip, spectroChip, modeChip, cleanChip, settingsChip, lastPlot;
+    Settings st;
+    bool minimal = false;
+    float attackCoef = 0.6f, releaseCoef = 0.12f, averageCoef = 0.3f;
     int mode = 0;
     juce::String triggerName, status;
     bool expanded = false, collisions = false, msAvailable = false, msOn = false, spectroOn = false;
@@ -258,6 +286,10 @@ public:
 
     // 0 = normal, 1 = osciloscopio ampliado, 2 = espectro ampliado
     void setFocusPanel (int panel);
+    // Modo limpio: solo el osciloscopio (1) o solo el espectro (2), del tamaño que quieras
+    void setCleanMode (bool on, int panel);
+    void toggleSettings (int panel);   // abre/cierra los ajustes del gráfico (1 = onda, 2 = espectro)
+    WaveformView& getWaveformView() noexcept { return wave; }
     SpectrumView& getSpectrumView() noexcept { return spectrum; }
     void selectPhaseReferenceByName (const juce::String& name);   // usado por la herramienta de capturas
 
@@ -277,6 +309,10 @@ private:
     };
 
     void timerCallback() override { refresh(); }
+    juce::ValueTree uiState();          // ajustes de la ventana, guardados con el Set
+    void applyViewSettings();
+    void applySizeLimits();
+    void layoutSettingsPanel();
     void drawMeter (juce::Graphics&, juce::Rectangle<float>, float level, juce::Colour, const juce::String& name);
     void drawLoudness (juce::Graphics&, juce::Rectangle<float>);
     void mouseDown (const juce::MouseEvent&) override;
@@ -335,7 +371,9 @@ private:
     std::set<int> hiddenKeys;
     std::map<int, std::pair<float, float>> corrSmooth;
     std::vector<float> tmpL, tmpR, tmpMono, gL, gR, specL, specR, specMono, refMono, refLow, otherMono, otherLow;
-    int focusPanel = 0, currentHz = 60;
+    int focusPanel = 0, currentHz = 60, settingsFor = 0;
+    bool cleanMode = false, restoringSize = true;
+    std::unique_ptr<juce::Component> settingsPanel;
     uint32_t auditionMask = 0;   // pistas que se filtran al escuchar una banda (se actualiza en refresh)
     void setAudition (bool on, float freq, float widthOct);
     float holdL = 0.0f, holdR = 0.0f;

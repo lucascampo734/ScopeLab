@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write   # para publicar la descarga directa (Releases)
+
 jobs:
   build:
     strategy:
@@ -58,3 +61,16 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: out
+
+      # Descarga directa sin iniciar sesión en GitHub:
+      # https://github.com/lucascampo734/ScopeLab/releases/download/ultima/ScopeLab-Mac.zip
+      - name: Publicar descarga directa
+        if: github.ref == 'refs/heads/main' && runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out && zip -qry ../ScopeLab-Mac.zip . && cd ..
+          gh release delete ultima --yes --cleanup-tag || true
+          gh release create ultima ScopeLab-Mac.zip --target "$GITHUB_SHA" \
+            --title "ScopeLab — última versión" \
+            --notes "Compilado automáticamente desde el último cambio. Instrucciones de instalación en el README."
